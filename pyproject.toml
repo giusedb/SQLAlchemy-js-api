@@ -6,8 +6,19 @@ authors = ["Your Name <you@example.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.13"
+python = "^3.10"
+redis = "^5.2.1"
+sqlalchemy = ">=2.0"
 
+
+[tool.poetry.group.devel.dependencies]
+pytest = "^8.3.4"
+ipython = "^8.31.0"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest-mock = "^3.14.0"
+ipython = "^8.31.0"
 
 [build-system]
 requires = ["poetry-core"]

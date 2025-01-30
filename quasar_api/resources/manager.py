@@ -1,7 +1,3 @@
-import contextvars
-
-import wrapt
-
 from .base import WebResource  # pylint disable=relative-beyond-top-level
 from ..exceptions import ResourceNotFoundException
 from quasar_api import context
@@ -29,18 +25,3 @@ class ResourceManager:
             print(result)
             return result
 
-class AsyncSafeContext:
-
-    def __init__(self, name: str):
-        var = contextvars.ContextVar(name)
-        self.__dict__['_var'] = var
-
-    def __getattr__(self, item):
-        return self.__dict__['_var'].get()[item]
-
-    def __setattr__(self, key, value):
-        print(f'set {key} to {value}')
-        self.__dict__['_var'].get()[key] = value
-
-    def init(self):
-        self.__dict__['_var'].set({})

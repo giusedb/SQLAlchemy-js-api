@@ -1,3 +1,1 @@
-from .manager import QuasarContextManager
-
-context: QuasarContextManager = None
+from .manager import request, session, db
