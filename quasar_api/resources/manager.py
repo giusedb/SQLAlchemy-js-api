@@ -1,11 +1,22 @@
+from redis import Redis
+from typing_extensions import Callable
+
+from quasar_api.context.manager import ContextManager
 from .base import WebResource  # pylint disable=relative-beyond-top-level
 from ..exceptions import ResourceNotFoundException
-from quasar_api import context
+
 
 class ResourceManager:
     """The global resource manager, which manages all registered resources."""
     _instance: 'ResourceManager' = None
     _resources: dict = {}
+
+    def __init__(self, session_maker: Callable | None = None,
+                 redis_connection: Redis | str | None = None):
+        self.context = ContextManager(self, session_maker, redis_connection)
+
+    def __call__(self, token=None):
+        return self.context(token)
 
     def register(self, resource: WebResource):
         """Register a web resource for getting exposed to the web endpoints."""
@@ -20,8 +31,7 @@ class ResourceManager:
         if not action:
             raise ResourceNotFoundException(f'Verb {resource}.{verb} not found')
 
-        async with context.context(token) as ctx:
+        async with self.context.context(token) as ctx:
             result = await action(*args, **kwargs)
             print(result)
             return result
-
