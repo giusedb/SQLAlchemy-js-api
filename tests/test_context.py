@@ -1,21 +1,10 @@
+import asyncio
 from asyncio import gather, run
 
-from quasar_api.context.manager import ContextProxy, ContextManager
 import pytest
-import asyncio
 
-@pytest.fixture
-def context_manager():
-
-    class MockSession:
-        async def commit(self):
-            await asyncio.sleep(0)
-
-        async def rollback(self):
-            await asyncio.sleep(0)
-
-    cm = ContextManager(None, lambda *x: MockSession())
-    return cm
+from quasar_api.context import request
+from quasar_api.context.manager import ContextProxy
 
 
 def test_proxy_dict_isolation():
@@ -49,9 +38,8 @@ def test_proxy_dict_isolation():
     assert len(result) == 40
 
 
-def test_context_enter(context_manager):
-    from quasar_api.context import request
 
+def test_context_enter(context_manager):
     async def init():
         token, session = await context_manager.web_session_man.new('mytoken')
         await context_manager.web_session_man.disconnect(session, token)
@@ -63,30 +51,36 @@ def test_context_enter(context_manager):
 def test_context_segregation(context_manager):
     from quasar_api.context import request, session
 
-    token = None
+    async def request1(x):
+        token = None
+        async def req(y):
+            nonlocal token
+            async with context_manager(token) as ctx:
+                print(f'r1:{x}:{y} {ctx.token}')
+                assert bool(token) == bool(y)
+                if token:
+                    _ = session.foo == 'foobar', 'Session not connected'
+                    assert token == ctx.token, "Session doesn't reconnect"
+                else:
+                    with pytest.raises(AttributeError):
+                        _ = session.foo
+                    request.foo = 'bar'
+                    session.foo = 'foobar'
+                token = ctx.token
 
-    async def request1(tok):
-        nonlocal token
-        async with context_manager(tok) as ctx:
-            print(f'r1: {ctx.token}')
-            if token:
+            async with context_manager(token) as ctx:
+                print(f'r2:{x}:{y} {ctx.token}')
+                assert session.foo == 'foobar', 'Session not connected'
                 with pytest.raises(AttributeError):
-                    _ = session.foo
-                assert token == ctx.token, "Session doesn't reconnect"
-            else:
-                assert session.foo == 'foobar', 'Session is not persistent'
-            token = ctx.token
-            request.foo = 'bar'
-            session.foo = 'foobar'
-
-
-    async def request2():
-        async with context_manager() as ctx:
-            print(f"r2: {ctx.token}")
-            with pytest.raises(AttributeError):
-                _ = request.foo
+                    _ = request.foo
+                request.foo = 'bar'
+                assert request.foo == 'bar', 'Request not connected'
+            print(f"Done {x}:{y}")
+        await req(0)
+        await req(1)
+        await req(2)
 
     async def main():
-        await gather(request1(token), request2(), request1(token))
+        await gather(*(asyncio.create_task(request1(_)) for _ in range(4)))
 
     run(main())
