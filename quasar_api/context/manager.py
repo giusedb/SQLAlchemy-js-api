@@ -4,6 +4,7 @@ from .redis import RedisSessionManager
 from redis import Redis
 
 class Request:
+    """Request-based empty object"""
     pass
 
 class ContextManager:
@@ -13,6 +14,7 @@ class ContextManager:
         def __init__(self, manager: 'ContextManager', token):
             self.token = token
             self.manager = manager
+            self.db_session = None
 
         async def __aenter__(self):
             if self.token:
@@ -21,21 +23,23 @@ class ContextManager:
                 self.token, self.session = await self.manager.web_session_man.new()
             session.update(self.session)
             request.update(Request())
-            db.update(self.manager.session_maker())
+            self.db_session = self.manager.session_maker()
+            self.db_session.begin()
+            db.update(self.db_session)
             return self
 
         async def __aexit__(self, exc_type, exc_val, exc_tb):
             await self.manager.web_session_man.disconnect(self.session, self.token)
             if not any((exc_val, exc_tb, exc_type)):
-                await db.commit()
+                await self.db_session.commit()
             else:
-                await db.rollback()
+                await self.db_session.rollback()
 
     def __init__(self, resource_manager, session_maker: Callable,
-                 web_session_connection: Redis | str = 'redis://localhost:6379/0'):
+                 redis_connection: Redis | str = 'redis://localhost:6379/0'):
         self.resource_manager = resource_manager
         self.session_maker = session_maker
-        self.web_session_man = RedisSessionManager(web_session_connection)
+        self.web_session_man = RedisSessionManager(redis_connection)
 
     def __call__(self, token: str | None = None):
         return self.Context(self, token)
@@ -65,5 +69,3 @@ class ContextProxy:
 session = ContextProxy('session')
 request = ContextProxy('request')
 db = ContextProxy('db_session')
-
-
