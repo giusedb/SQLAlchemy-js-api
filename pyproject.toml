@@ -9,6 +9,7 @@ readme = "README.md"
 python = "^3.10"
 redis = "^5.2.1"
 sqlalchemy = ">=2.0"
+aioredis = "^2.0.1"
 
 
 [tool.poetry.group.devel.dependencies]
@@ -19,6 +20,10 @@ ipython = "^8.31.0"
 [tool.poetry.group.dev.dependencies]
 pytest-mock = "^3.14.0"
 ipython = "^8.31.0"
+pytest-mockredis = "^0.1.6"
+mockaioredis = "^0.0.16"
+aiosqlite = "^0.20.0"
+greenlet = "^3.1.1"
 
 [build-system]
 requires = ["poetry-core"]
