@@ -3,7 +3,14 @@ from types import FunctionType
 
 
 def verb(func: FunctionType) -> FunctionType:
+    def serialize(result):
+        return []
+
+    def wrapper(*args, **kwargs):
+        return serialize(func(*args, **kwargs))
+
     func.is_verb = True
+    func.call = wrapper
     return func
 
 

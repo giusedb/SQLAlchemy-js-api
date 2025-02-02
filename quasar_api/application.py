@@ -3,7 +3,6 @@ from types import FunctionType
 from typing import List
 
 from data.models.base import BaseModel
-from quasar_api.context import QuasarContextManager
 from quasar_api.resources.manager import ResourceManager
 
 from redis.asyncio import Redis
