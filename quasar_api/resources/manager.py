@@ -1,3 +1,4 @@
+from click import style
 from redis import Redis
 from typing_extensions import Callable
 
@@ -5,6 +6,9 @@ from quasar_api.context.manager import ContextManager
 from .base import WebResource  # pylint disable=relative-beyond-top-level
 from .db import DBResource
 from ..exceptions import ResourceNotFoundException
+import logging
+
+logger = logging.getLogger(__package__)
 
 
 class ResourceManager:
@@ -35,6 +39,7 @@ class ResourceManager:
 
     async def action(self, token: str, resource: str, verb: str, *args, **kwargs):
         """Finds the correct `resource` and call the right `verb` with `args`."""
+        logger.info(f'received request to {style(verb, 'red')} on {style(resource, 'blue')} from {style(token, 'yellow')}.')
         res = self.resources.get(resource)
         if not res:
             raise ResourceNotFoundException(f'Resource {resource} not found')
@@ -44,7 +49,6 @@ class ResourceManager:
 
         async with self.context(token):
             result = await action(*args, **kwargs)
-            print(result)
             return result
 
     def expose(self, model):
