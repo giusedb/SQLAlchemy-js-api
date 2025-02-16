@@ -3,7 +3,7 @@ from operator import attrgetter, itemgetter
 from typing import List
 
 from sqlalchemy import select
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute
 from sqlalchemy.sql.operators import eq
 
 from .base import WebResource, verb
@@ -15,6 +15,11 @@ def to_js_type(field_type) -> str:
         return field_type.__name__.lower()
     return type(field_type).__name__.lower()
 
+def attributes(model) -> dict[str, InstrumentedAttribute]:
+    """Introspect a model and return a dictionary of DB attributes."""
+    attrs = ((name, getattr(model, name)) for name in dir(model))
+    return {name: attr for name, attr in attrs
+            if isinstance(attr, InstrumentedAttribute)}
 
 class DBResource(WebResource):
     """Web Resource based on sqlalchemy model."""
@@ -34,7 +39,7 @@ class DBResource(WebResource):
             {'resource': self.resource_manager.tables[fk.column.table.name].name,
              'description': 'TODO',
              'type': 'in',
-             'atribute': fk.constraint.column_keys}
+             'attribute': fk.constraint.column_keys}
             for fk in self.resource_manager.foreign_keys
             if fk.constraint.table == self.model.__table__
         ]
@@ -45,7 +50,7 @@ class DBResource(WebResource):
             {'resource': self.resource_manager.tables[fk.constraint.table.name].name,
              'description': 'TODO',
              'type': 'out',
-             'atribute': fk.column.table.name}
+             'attribute': fk.column.table.name}
             for fk in self.resource_manager.foreign_keys
             if fk.column.table == self.model.__table__
         ]
@@ -68,7 +73,8 @@ class DBResource(WebResource):
             'description': field.comment,
             'type': to_js_type(field.type),
             'widget': None,
-            'validators': []
+            'constraints': ['TODO'],
+            'validators': [],
             } for field in self.model.__table__.columns]
         ret['UID'] = [f.name for f in self.model.__table__.primary_key]
         ret['references'] = self.references
