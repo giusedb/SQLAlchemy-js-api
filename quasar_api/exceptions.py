@@ -1,7 +1,26 @@
-class ResourceNotFoundException(Exception):
+
+class QuasarException(Exception):
+    """Helps the HTTP exception compute flows."""
+
+    status_code = 500
+    message = 'Internal Server Error'
+
+    def __init__(self, status_code=None, message=None):
+        if status_code:
+            self.status_code = status_code
+        if message:
+            self.message = message
+
+class ResourceNotFoundException(QuasarException):
     """One of the web resource wasn't found."""
+    status_code = 404
 
 
-class SessionNotFound(Exception):
-    pass
+
+class SessionNotFound(QuasarException):
+
+    def __init__(self, token):
+        super().__init__(403, f'Session {token} not found')
+
+
 
