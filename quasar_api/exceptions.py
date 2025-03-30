@@ -23,4 +23,6 @@ class SessionNotFound(QuasarException):
         super().__init__(403, f'Session {token} not found')
 
 
-
+class RecordNotFound(QuasarException):
+    def __init__(self, message):
+        super().__init__(404, message)
