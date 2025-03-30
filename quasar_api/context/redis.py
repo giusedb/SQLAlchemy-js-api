@@ -22,6 +22,7 @@ class RedisSessionManager(SessionManager):
         if raw is None:
             raise SessionNotFound(token)
         try:
+            await self.connection.expire(self.session_format.format(token=token, self=self), self.duration)
             return Storage(loads(raw))
         except UnpicklingError as exc:
             raise SessionNotFound('Session corrupted') from exc
