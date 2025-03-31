@@ -1,3 +1,4 @@
+import asyncio
 from functools import wraps
 from typing import List, Tuple
 
@@ -14,6 +15,18 @@ def memoize(func):
             cache[args] = func(*args)
         return cache[args]
 
+    return wrapper
+
+def async_memoize(func):
+    cache = {}
+    @wraps(func)
+    async def wrapper(*args):
+        if args not in cache:
+            result = await func(*args)
+            cache[args] = result
+            return result
+        await asyncio.sleep(0)
+        return cache[args]
     return wrapper
 
 def all_model(base) -> Tuple[DeclarativeBase]:

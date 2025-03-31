@@ -12,7 +12,7 @@ from ..context import db
 from pluralizer import Pluralizer
 
 from ..exceptions import RecordNotFound
-from ..utils import col2attr
+from ..utils import col2attr, memoize, async_memoize
 
 pluralizer = Pluralizer()
 pluralize = pluralizer.plural
@@ -144,6 +144,7 @@ class DBResource(WebResource):
         return ret
 
     @verb
+    @async_memoize
     async def describe(self):
         await asyncio.sleep(0)
         return {"DESCRIPTION": self.description}
