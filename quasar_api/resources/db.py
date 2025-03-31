@@ -147,11 +147,11 @@ class DBResource(WebResource):
     @async_memoize
     async def describe(self):
         await asyncio.sleep(0)
-        return {"DESCRIPTION": self.description}
+        return {"DESCRIPTION": [self.description]}
 
-    async def by_pk(self, pk):
+    async def by_pk(self, *pks):
         """Get the record object by its primary key."""
-        return (await db.execute(select(self.model).where(self.pk == pk))).scalar()
+        return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalars()
 
     @verb
     async def get(self, filter: dict | None = None) -> list[DeclarativeBase]:
@@ -160,7 +160,7 @@ class DBResource(WebResource):
         if filter:
             query = query.where(reduce(and_, (
                 getattr(self.model, name).in_(val) for name, val in filter.items())))
-        data = (await db.execute(query))
+        data = await db.execute(query)
         return data.scalars().all()
 
     @verb
