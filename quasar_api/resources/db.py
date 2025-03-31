@@ -2,7 +2,7 @@ import asyncio
 from functools import reduce
 from typing import List
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute, Relationship, ColumnProperty, RelationshipDirection
 from sqlalchemy.sql.operators import eq, contains, and_
 
@@ -185,11 +185,12 @@ class DBResource(WebResource):
 
 
     @verb
-    async def delete(self, pk: str) -> None:
+    async def delete(self, pks: List[str]) -> None:
         """Delete the record on the DB."""
-        rec = await self.by_pk(pk)
-        if not rec:
-            raise RecordNotFound(f'Record {pk} not found')
-        db.delete(rec)
-        await db.flush()
-        return rec
+        ids = tuple((await db.execute(select(self.pk).where(self.pk.in_(pks)))).scalars())
+        if not ids:
+            if len(pks) > 1:
+                RecordNotFound(f'Records {pks} not found')
+            raise RecordNotFound(f'Record {pks[0]} not found')
+        await db.execute(delete(self.model).where(self.pk.in_(pks)))
+        return {"DELETED": {self.name.lower(): ids}}
