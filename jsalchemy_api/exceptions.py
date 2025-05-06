@@ -1,5 +1,5 @@
 
-class QuasarException(Exception):
+class JSAlchemyException(Exception):
     """Helps the HTTP exception compute flows."""
 
     status_code = 500
@@ -11,18 +11,17 @@ class QuasarException(Exception):
         if message:
             self.message = message
 
-class ResourceNotFoundException(QuasarException):
+class ResourceNotFoundException(JSAlchemyException):
     """One of the web resource wasn't found."""
     status_code = 404
 
 
-
-class SessionNotFound(QuasarException):
+class SessionNotFound(JSAlchemyException):
 
     def __init__(self, token):
         super().__init__(403, f'Session {token} not found')
 
 
-class RecordNotFound(QuasarException):
+class RecordNotFound(JSAlchemyException):
     def __init__(self, message):
         super().__init__(404, message)

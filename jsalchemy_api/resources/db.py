@@ -3,16 +3,16 @@ from functools import reduce
 from typing import List
 
 from sqlalchemy import select, delete
-from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute, Relationship, ColumnProperty, RelationshipDirection
-from sqlalchemy.sql.operators import eq, contains, and_
+from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
+from sqlalchemy.sql.operators import and_
 
 from .base import WebResource, verb
 from ..context import db
 
 from pluralizer import Pluralizer
 
-from ..exceptions import RecordNotFound
-from ..utils import col2attr, memoize, async_memoize
+from ..exceptions import RecordNotFound, ResourceNotFoundException
+from ..utils import col2attr
 
 pluralizer = Pluralizer()
 pluralize = pluralizer.plural
@@ -22,6 +22,17 @@ def to_js_type(field_type) -> str:
     if isinstance(field_type, type):
         return field_type.__name__.lower()
     return type(field_type).__name__.lower()
+
+
+def _get_remote(model, prop):
+    pair = tuple(prop.remote_side)
+    if len(pair) == 1:
+        return pair[0]
+    if next(iter(pair[0].foreign_keys)).constraint.referred_table == model.__table__:
+        local, remote = pair
+    else:
+        local, remote = reversed(pair)
+    return remote
 
 
 class DBResource(WebResource):
@@ -39,6 +50,8 @@ class DBResource(WebResource):
             return {col: getattr(obj, col) for col in self.columns}
         model.__serialize__ = serialize
         self.pk = model.__mapper__.primary_key[0]
+        self.m2ms = { prop.key: M2MResource(self, prop) for prop in model.__mapper__.relationships
+                      if prop.direction == RelationshipDirection.MANYTOMANY }
 
     @property
     def one_to_many(self) -> List[dict]:
@@ -81,43 +94,44 @@ class DBResource(WebResource):
         """List all the relations for this Model."""
 
         # return list(sorted(self.one_to_many + self.many_to_one, key=itemgetter('resource')))
-        def get_remote(prop):
-            pair = tuple(prop.remote_side)
-            if len(pair) == 1:
-                return pair[0]
-            if next(iter(pair[0].foreign_keys)).constraint.referred_table == self.model.__table__:
-                local, remote = pair
-            else:
-                local, remote = reversed(pair)
-            return remote
 
         def resolve(prop) -> str:
             if prop.direction == RelationshipDirection.MANYTOMANY:
-                table_name = next(iter(get_remote(prop).foreign_keys)).constraint.referred_table.name
+                table_name = next(iter(_get_remote(self.model, prop).foreign_keys)).constraint.referred_table.name
             else:
                 table_name = next(iter(prop.remote_side)).table.name
             return self.resource_manager.tables[table_name]
+
+        def serialize_m2m(prop):
+            remote_resource = next(iter(_get_remote(self.model, prop).foreign_keys)).column
+            return dict(
+                resource=resolve(prop).name,
+                type='bi',
+                attribute=prop.key,
+                foreign_attribute=col2attr(resolve(prop).model)[next(iter(_get_remote(self.model, prop).foreign_keys)).column.name],  # TODO multifields
+                description=prop.doc,
+                local_attribute=col2attr(self.model)[next(iter(prop.local_columns)).name],
+            )
 
         def serialize(name, prop):
             directions = {
                 RelationshipDirection.MANYTOONE: 'in',
                 RelationshipDirection.ONETOMANY: 'out',
-                RelationshipDirection.MANYTOMANY: 'bi',
             }
 
             return dict(
                 resource=resolve(prop).name,
                 type=directions[prop.direction],
                 attribute=name,
-                foreign_attribute=col2attr(resolve(prop).model)[get_remote(prop).name],  # TODO multifields
+                foreign_attribute=col2attr(resolve(prop).model)[_get_remote(self.model, prop).name],  # TODO multifields
                 description=prop.doc,
                 local_attribute=col2attr(self.model)[next(iter(prop.local_columns)).name],
             )
 
         for prop in self.model.__mapper__.relationships:
+            tab_name = _get_remote(self.model, prop).table.name
             if prop.direction == RelationshipDirection.MANYTOMANY:
-                continue
-            tab_name = get_remote(prop).table.name
+                yield serialize_m2m(prop)
             if tab_name not in self.resource_manager.tables:
                 continue
             yield serialize(prop.key, prop)
@@ -144,7 +158,7 @@ class DBResource(WebResource):
         return ret
 
     @verb
-    @async_memoize
+    # @async_memoize
     async def describe(self):
         await asyncio.sleep(0)
         return {"DESCRIPTION": [self.description]}
@@ -183,7 +197,6 @@ class DBResource(WebResource):
         db.flush()
         return rec
 
-
     @verb
     async def delete(self, pks: List[str]) -> None:
         """Delete the record on the DB."""
@@ -194,3 +207,26 @@ class DBResource(WebResource):
             raise RecordNotFound(f'Record {pks[0]} not found')
         await db.execute(delete(self.model).where(self.pk.in_(pks)))
         return {"DELETED": {self.name.lower(): ids}}
+
+    @verb
+    async def m2m(self, attribute: str, keys):
+        if attribute not in self.m2ms:
+            raise ResourceNotFoundException(404, f'Attribute {attribute} not found on {self.name} resource')
+        return { 'MANYTOMANY': { self.name.lower(): { attribute: await self.m2ms[attribute].get(keys) } } }
+
+
+class M2MResource:
+
+    def __init__(self, resource: DBResource, prop: RelationshipProperty):
+        """Many to Many container for the DBResource."""
+        self.resource_manager = resource.resource_manager
+        self.primary_resource = resource
+        remote_field = _get_remote(resource.model, prop)
+        local_field = next(iter((fk.parent for c in remote_field.table.columns
+                                 for fk in c.foreign_keys if fk.column.table == resource.model.__table__)))
+        self.fields = [local_field, remote_field]
+
+    async def get(self, keys):
+        """Query the DB to fetch the result items related to `keys."""
+        db_result = await db.execute(select(*self.fields).where(self.fields[0].in_(keys)))
+        return list(map(list, db_result))

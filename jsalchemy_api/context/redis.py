@@ -4,7 +4,7 @@ from redis.asyncio import Redis
 from pickle import loads, dumps, UnpicklingError
 
 from .base import Storage, SessionManager
-from quasar_api.exceptions import SessionNotFound
+from jsalchemy_api.exceptions import SessionNotFound
 
 
 class RedisSessionManager(SessionManager):

@@ -3,8 +3,8 @@ from asyncio import gather, run
 
 import pytest
 
-from quasar_api.context import request
-from quasar_api.context.manager import ContextProxy
+from jsalchemy_api.context import request
+from jsalchemy_api.context.manager import ContextProxy
 
 
 def test_proxy_dict_isolation():
@@ -49,7 +49,7 @@ def test_context_enter(context_manager):
     asyncio.run(init())
 
 def test_context_segregation(context_manager):
-    from quasar_api.context import request, session
+    from jsalchemy_api.context import request, session
 
     async def request1(x):
         token = None

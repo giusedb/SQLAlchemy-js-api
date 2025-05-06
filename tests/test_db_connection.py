@@ -5,10 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import Mapped, DeclarativeBase, mapped_column
 from datetime import date
 from sqlalchemy import select
-from quasar_api.context import db
+from jsalchemy_api.context import db
 import asyncio
 
-from quasar_api.resources.manager import ResourceManager
+from jsalchemy_api.resources.manager import ResourceManager
 from tests.fixtures import Base
 
 

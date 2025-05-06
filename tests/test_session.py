@@ -4,7 +4,7 @@ import pytest
 
 
 def test_session_new():
-    from quasar_api.context.redis import RedisSessionManager
+    from jsalchemy_api.context.redis import RedisSessionManager
 
     async def cycle():
         session_manager = RedisSessionManager()
@@ -17,7 +17,7 @@ def test_session_new():
 
 
 def test_session_connect():
-    from quasar_api.context.redis import RedisSessionManager
+    from jsalchemy_api.context.redis import RedisSessionManager
 
     token = None
 

@@ -1,12 +1,12 @@
 [tool.poetry]
-name = "quasar-api"
+name = "sqlalchemy-js-api"
 version = "0.1.0"
 description = ""
-authors = ["Your Name <you@example.com>"]
+authors = ["Giuseppe Di Bona <giusedb@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 redis = "^5.2.1"
 sqlalchemy = ">=2.0"
 aioredis = "^2.0.1"

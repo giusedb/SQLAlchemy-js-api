@@ -7,9 +7,9 @@ from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing_extensions import Callable
 
-from quasar_api.context.manager import ContextManager
-from quasar_authentication.manager import AuthenticationManager
-from quasar_authorization.models import UserMixin
+from jsalchemy_api.context.manager import ContextManager
+from jsalchemy_authentication.manager import AuthenticationManager
+from jsalchemy_authorization.models import UserMixin
 from .base import WebResource  # pylint disable=relative-beyond-top-level
 from .db import DBResource
 from ..exceptions import ResourceNotFoundException
@@ -95,7 +95,7 @@ class ResourceManager:
 
     def expose(self, model):
         """Model decorator to register the model"""
-        resource = DBResource(self, model=model **getattr(model, '__quasar__', {}))
+        resource = DBResource(self, model=model **getattr(model, '__JSAlchemy__', {}))
         self.register(resource)
         return model
 

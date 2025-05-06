@@ -1,4 +1,4 @@
-from quasar_api.context.manager import ContextManager, session, request
+from jsalchemy_api.context.manager import ContextManager, session, request
 
 if __name__ == '__main__':
     import asyncio

@@ -3,7 +3,8 @@ from types import FunctionType
 from typing import List
 
 from data.models.base import BaseModel
-from quasar_api.resources.manager import ResourceManager
+from jsalchemy_api.context.manager import ContextManager
+from jsalchemy_api.resources.manager import ResourceManager
 
 from redis.asyncio import Redis
 
@@ -12,7 +13,7 @@ def setup_application(db_url: str = None, session_maker: FunctionType = None,
                       session_url: str = None, redis_connection: Redis = None,
                       auto_discover_models: bool = True, models: List[BaseModel] = []) -> ResourceManager:
     """Set up the application and returns the resource manager."""
-    from quasar_api import context
+    from jsalchemy_api import context
 
     db_parsed = urllib.parse.urlparse(db_url)
     session_parsed = urllib.parse.urlparse(session_url)
@@ -36,5 +37,5 @@ def setup_application(db_url: str = None, session_maker: FunctionType = None,
         redis_connection = Redis.from_url(session_url)
 
     resource_manager = ResourceManager()
-    context.context = QuasarContextManager(resource_manager, session_maker, redis_connection)
+    context.context = ContextManager(resource_manager, session_maker, redis_connection)
     return resource_manager

@@ -8,7 +8,7 @@ class Request:
     pass
 
 class ContextManager:
-    """Quasar request context manager."""
+    """JSAlchemy request context manager."""
 
     class Context:
         def __init__(self, manager: 'ContextManager', token):
