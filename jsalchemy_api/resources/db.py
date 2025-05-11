@@ -12,7 +12,7 @@ from ..context import db
 from pluralizer import Pluralizer
 
 from ..exceptions import RecordNotFound, ResourceNotFoundException
-from ..utils import col2attr
+from ..utils import col2attr, memoize
 
 pluralizer = Pluralizer()
 pluralize = pluralizer.plural
@@ -39,7 +39,8 @@ class DBResource(WebResource):
     """Web Resource based on sqlalchemy model."""
 
     def __init__(self, resource_manager: 'ResourceManager', name: str,
-                 model: DeclarativeBase, permissions: dict = None, columns: list = None):
+                 model: DeclarativeBase, permissions: dict = None, columns: list = None,
+                 extras: dict = None, format_string: str = None):
         super(DBResource, self).__init__()
         self.name = name
         self.model = model
@@ -52,13 +53,13 @@ class DBResource(WebResource):
         self.pk = model.__mapper__.primary_key[0]
         self.m2ms = { prop.key: M2MResource(self, prop) for prop in model.__mapper__.relationships
                       if prop.direction == RelationshipDirection.MANYTOMANY }
+        self.extras = extras or {}
+        self.format_string = format_string
+
 
     @property
     def one_to_many(self) -> List[dict]:
         """Checks all the "One-to-many" relations."""
-
-        def get_attribute_name(self, fk):
-            return pluralize(self.resource_manager.tables[fk.column.table.name].name)
 
         def serialize(name, field):
             return {'resource': self.resource_manager[field.prop.argument],
@@ -137,6 +138,7 @@ class DBResource(WebResource):
             yield serialize(prop.key, prop)
 
     @property
+    @memoize
     def description(self):
 
         def serialize(name, field):
@@ -144,7 +146,7 @@ class DBResource(WebResource):
                 'name': name,
                 'description': field.doc,
                 'type': to_js_type(field.type),
-                'extra': {},
+                'extra': self.extras.get(name, {}),
                 'validators': [],  # TODO add validators
             }
 
@@ -155,6 +157,7 @@ class DBResource(WebResource):
         ret['fields'] = [serialize(col.key, col) for col in self.model.__mapper__.columns]
         ret['UID'] = [f.name for f in self.model.__table__.primary_key]
         ret['references'] = tuple(self.references)
+        ret['format_string'] = self.format_string
         return ret
 
     @verb
@@ -165,7 +168,7 @@ class DBResource(WebResource):
 
     async def by_pk(self, *pks):
         """Get the record object by its primary key."""
-        return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalars()
+        return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalar()
 
     @verb
     async def get(self, filter: dict | None = None) -> list[DeclarativeBase]:
@@ -178,7 +181,7 @@ class DBResource(WebResource):
         return data.scalars().all()
 
     @verb
-    async def post(self, record: dict) -> None:
+    async def post(self, **record: dict) -> None:
         """Create a new `model` instance on on the database."""
         item = self.model(**record)
         db.add(item)
@@ -186,8 +189,9 @@ class DBResource(WebResource):
         return item
 
     @verb
-    async def put(self, pk: str, record: dict) -> None:
+    async def put(self, **record: dict) -> None:
         """Update the record on the DB."""
+        pk = record.pop(self.description['UID'][0])
         rec = await self.by_pk(pk)
         if not rec:
             raise RecordNotFound(f'Record {pk} not found')
