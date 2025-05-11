@@ -69,7 +69,7 @@ class ResourceManager:
 
     async def action(self, token: str, resource: str, verb: str, *args, **kwargs) -> dict:
         """Finds the correct `resource` and call the right `verb` with `args`."""
-        logger.info(f'received request to {style(verb, 'red')} on {style(resource, 'blue')} from {style(token, 'yellow')}.')
+        logger.info(f"received request to {style(verb, 'red')} on {style(resource, 'blue')} from {style(token, 'yellow')}.")
         res = self.resources.get(resource)
         if not res:
             raise ResourceNotFoundException(f'Resource {resource} not found')
@@ -92,6 +92,8 @@ class ResourceManager:
                 'token': token,
                 'application': self.app_name
             }
+    async def logout(self, token: str) -> dict | None:
+        return await self.context.web_session_man.logout(token)
 
     def expose(self, model):
         """Model decorator to register the model"""

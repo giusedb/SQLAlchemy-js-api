@@ -3,6 +3,8 @@ from uuid import uuid4
 from redis.asyncio import Redis
 from pickle import loads, dumps, UnpicklingError
 
+from sqlalchemy import Boolean
+
 from .base import Storage, SessionManager
 from jsalchemy_api.exceptions import SessionNotFound
 
@@ -32,11 +34,13 @@ class RedisSessionManager(SessionManager):
                                   session.dumps(), ex=self.duration)
 
     async def new(self, token:str = None):
+        """Create a new session for the given `token`."""
         token = token or str(uuid4())
         while await self.connection.keys(self.session_format.format(self=self, token=token)):
             token = str(uuid4())
         await self.connection.set(self.session_format.format(self=self, token=token), dumps({}))
         return token, Storage({})
 
-    def destroy(self, token):
-        return self.connection.delete(self.session_format.format(self=self, token=token))
+    async def destroy(self, token):
+        """Destroy the session from Redis."""
+        return bool(await self.connection.delete(self.session_format.format(self=self, token=token)))
