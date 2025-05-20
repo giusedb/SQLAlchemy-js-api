@@ -6,6 +6,7 @@ from click import style
 from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing_extensions import Callable
+from ..exceptions import JSAlchemyException
 
 from jsalchemy_api.context.manager import ContextManager
 from jsalchemy_authentication.manager import AuthenticationManager

@@ -2,9 +2,9 @@ import asyncio
 from functools import reduce
 from typing import List
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
-from sqlalchemy.sql.operators import and_
 
 from .base import WebResource, verb
 from ..context import db
@@ -63,7 +63,7 @@ class DBResource(WebResource):
 
         def serialize(name, field):
             return {'resource': self.resource_manager[field.prop.argument],
-                     'type': 'in',
+                     'type': 'many',
                      'foreign_field': next(iter(field.prop.synchronize_pairs))[0].name,
                      'attribute': name,
                      'description': 'TODO'}
@@ -79,7 +79,7 @@ class DBResource(WebResource):
 
         def serialize(fk):
             return {'resource': self.resource_manager.tables[fk.constraint.table.name].name,
-                     'type': 'out',
+                     'type': 'one',
                      'foreign_field': fk.constraint.name,
                      'attribute': fk.column.table.name,
                      'description': 'TODO'}
@@ -107,7 +107,7 @@ class DBResource(WebResource):
             remote_resource = next(iter(_get_remote(self.model, prop).foreign_keys)).column
             return dict(
                 resource=resolve(prop).name,
-                type='bi',
+                type='m2m',
                 attribute=prop.key,
                 foreign_attribute=col2attr(resolve(prop).model)[next(iter(_get_remote(self.model, prop).foreign_keys)).column.name],  # TODO multifields
                 description=prop.doc,
@@ -116,8 +116,8 @@ class DBResource(WebResource):
 
         def serialize(name, prop):
             directions = {
-                RelationshipDirection.MANYTOONE: 'in',
-                RelationshipDirection.ONETOMANY: 'out',
+                RelationshipDirection.MANYTOONE: 'one',
+                RelationshipDirection.ONETOMANY: 'many',
             }
 
             return dict(
@@ -138,7 +138,7 @@ class DBResource(WebResource):
             yield serialize(prop.key, prop)
 
     @property
-    @memoize
+    # @memoize
     def description(self):
 
         def serialize(name, field):
@@ -213,10 +213,19 @@ class DBResource(WebResource):
         return {"DELETED": {self.name.lower(): ids}}
 
     @verb
-    async def m2m(self, attribute: str, keys):
+    async def m2m(self, attribute: str, method: str, keys):
         if attribute not in self.m2ms:
             raise ResourceNotFoundException(404, f'Attribute {attribute} not found on {self.name} resource')
-        return { 'MANYTOMANY': { self.name.lower(): { attribute: await self.m2ms[attribute].get(keys) } } }
+        m2m = self.m2ms[attribute]
+        if not m2m:
+            raise ResourceNotFoundException(404, f'Verb {self.name}.m2m.{attribute} not found on {self.name} resource')
+        verb = getattr(m2m, method)
+        if not verb:
+            raise ResourceNotFoundException(404, f'Method {method} not found on {self.name} resource')
+        ret = await verb(keys)
+        if ret:
+            return {'MANYTOMANY': {self.name.lower(): {attribute: ret } } }
+        return ret
 
 
 class M2MResource:
@@ -230,7 +239,24 @@ class M2MResource:
                                  for fk in c.foreign_keys if fk.column.table == resource.model.__table__)))
         self.fields = [local_field, remote_field]
 
-    async def get(self, keys):
+    async def get(self, keys) -> list[list[str]]:
         """Query the DB to fetch the result items related to `keys."""
         db_result = await db.execute(select(*self.fields).where(self.fields[0].in_(keys)))
         return list(map(list, db_result))
+
+    async def add(self, keys: List[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Associate a list of related resources to the current one.
+
+        keys: list of pairs of local and remote keys.
+        """
+        loc, rem = self.fields
+        pairs = set(await db.execute(select(*self.fields).where(
+            or_(*(and_(loc == l, rem == r) for l, r in keys)))))
+        pairs = set(map(tuple, keys)) - pairs
+        if pairs:
+            values = [{loc.name: l, rem.name: r} for l, r in pairs]
+            try:
+                await db.execute(loc.table.insert(), values)
+            except IntegrityError:
+                raise
+        return await self.get(sorted({k[0] for k in keys}))
