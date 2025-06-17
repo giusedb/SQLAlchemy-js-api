@@ -260,3 +260,14 @@ class M2MResource:
             except IntegrityError:
                 raise
         return await self.get(sorted({k[0] for k in keys}))
+    
+    async def delete(self, keys: List[tuple[str, str]]) -> None:
+        """Dissociate a list of related resources from the current one.
+
+        keys: list of pairs of local and remote keys."""
+        loc, rem = self.fields
+        try:
+            await db.execute(delete(loc.table).where(or_(*((and_(loc == l, rem == r) for l, r in keys)))))
+        except IntegrityError as e:
+            raise
+        return await self.get(sorted({k[0] for k in keys}))
