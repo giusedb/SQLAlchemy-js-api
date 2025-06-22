@@ -54,7 +54,7 @@ class ContextProxy:
         self.__dict__['__var'].set(obj)
 
     def __getattr__(self, item: str):
-        return getattr(self.__dict__['__var'].get(), item)
+        return getattr(self.__dict__['__var'].get(), item, None)
 
     def __setattr__(self, key, value):
         setattr(self.__dict__['__var'].get(), key, value)

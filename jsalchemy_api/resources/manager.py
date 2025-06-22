@@ -1,14 +1,19 @@
 import time
 from collections import defaultdict
-from typing import Iterable
+from functools import reduce
+from typing import Iterable, Tuple
 
 from click import style
+from jinja2.runtime import exported
 from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
+
+from jsalchemy_authorization import permissions
 from ..exceptions import JSAlchemyException
 
-from jsalchemy_api.context.manager import ContextManager
+from jsalchemy_api.context.manager import ContextManager, session
 from jsalchemy_authentication.manager import AuthenticationManager
 from jsalchemy_authorization.models import UserMixin
 from .base import WebResource  # pylint disable=relative-beyond-top-level
@@ -73,7 +78,7 @@ class ResourceManager:
         logger.info(f"received request to {style(verb, 'red')} on {style(resource, 'blue')} from {style(token, 'yellow')}.")
         res = self.resources.get(resource)
         if not res:
-            raise ResourceNotFoundException(f'Resource {resource} not found')
+            raise ResourceNotFoundException(f'Resource "{resource}" not found')
         action = getattr(res, verb, None)
         if not action:
             raise ResourceNotFoundException(f'Verb {resource}.{verb} not found')
@@ -86,6 +91,8 @@ class ResourceManager:
         """Log in the user and return the status object."""
         user = await self.auth_man.login(username, password)
         token, _ = await self.context.web_session_man.new()
+        async with self.context(token) as ctx:
+            session.user = user
         if user:
             return {
                 'user': user.to_dict(),
@@ -93,6 +100,7 @@ class ResourceManager:
                 'token': token,
                 'application': self.app_name
             }
+
     async def logout(self, token: str) -> dict | None:
         return await self.context.web_session_man.logout(token)
 
@@ -109,3 +117,24 @@ class ResourceManager:
     def __contains__(self, item):
         """Check if the resource is in the resource list"""
         return item in self.resources
+
+    def expose(self, name: str = None, permissions: dict = None, columns: Tuple[str] = (),
+               format_string:str = None, read_only_columns: Tuple[str]= ()) -> type | Callable:
+        """Expose the model to API."""
+        def wrapper(cls):
+            nonlocal name, permissions, columns, format_string, read_only_columns
+            params = ('name', 'permissions', 'columns', 'format_string', 'read_only_columns')
+            exposed = [c.__dict__['__expose__'] for c in reversed(cls.mro()) if '__expose__' in c.__dict__]
+            reducible = {key: tuple(filter(bool, (c.get(key) for c in exposed))) for key in params}
+            if not name:
+                name = reducible['name'] and reducible['name'][0] or cls.__name__.lower()
+            read_only_columns = reduce(lambda x, y: x.union(y),
+                                       map(set, reducible['read_only_columns']), set(read_only_columns))
+            resource = DBResource(self, name=name, model=cls, permissions=permissions,
+                                  columns=columns, format_string=format_string, read_only_columns=read_only_columns)
+            self.register(resource)
+            return cls
+        if name and type(name) is type and issubclass(name, DeclarativeBase):
+            cls, name = name, name.__name__.lower()
+            return wrapper(cls)
+        return wrapper

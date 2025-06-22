@@ -5,7 +5,7 @@ class JSAlchemyException(Exception):
     status_code = 500
     message = 'Internal Server Error'
 
-    def __init__(self, status_code=None, message=None):
+    def __init__(self, message: str=None, status_code: int=None):
         if status_code:
             self.status_code = status_code
         if message:
@@ -15,13 +15,12 @@ class ResourceNotFoundException(JSAlchemyException):
     """One of the web resource wasn't found."""
     status_code = 404
 
-
 class SessionNotFound(JSAlchemyException):
 
     def __init__(self, token):
-        super().__init__(403, f'Session {token} not found')
+        super().__init__(f'Session "{token}" not found', 403)
 
 
 class RecordNotFound(JSAlchemyException):
-    def __init__(self, message):
-        super().__init__(404, message)
+
+    status_code = 404

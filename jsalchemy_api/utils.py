@@ -1,10 +1,22 @@
 import asyncio
+from datetime import datetime
+from decimal import Decimal
 from functools import wraps
-from typing import List, Tuple
+from typing import Tuple
 
 from orjson.orjson import dumps
-from sqlalchemy.orm import InstrumentedAttribute, RelationshipProperty, Relationship, ColumnProperty, DeclarativeBase
+from sqlalchemy.orm import ColumnProperty, DeclarativeBase
+from sqlalchemy import DateTime, Date, Interval, LargeBinary, DECIMAL
 
+TYPE_SERIALIZERS = {
+    DateTime: lambda x: x and x.timestamp(),
+    Date: lambda x: x and datetime.fromordinal(x.toordinal()).timestamp(),
+    Interval: lambda x: x.total_seconds(),
+    Decimal: lambda x: float(x),
+    DECIMAL: lambda x: float(x),
+}
+
+UNSERIALIZABLE_TYPES = {LargeBinary}
 
 def memoize(func):
     cache = {}
@@ -58,11 +70,22 @@ def col2attr(model) -> dict:
     return { next(iter(p.columns)).name: p.key
              for p in model.__mapper__.attrs if isinstance(p, ColumnProperty)}
 
+def type_converter(model):
+    # TODO add limit fields to visible fields (`__exposed__`)
+    colnames = col2attr(model)
+    return tuple(
+        (name, colnames[name], TYPE_SERIALIZERS.get(type(c.type), lambda x: x))
+        for name, c in columns(model).items()
+    )
+
 class JSONMixin:
 
     def to_dict(self) -> dict:
         """Transform any Database object into a dictionary."""
-        return {name: getattr(self, name) for name in col_names(self.__class__)}
+        return {
+            r_name: convert(getattr(self, name, None))
+            for name, r_name, convert in type_converter(type(self))
+        }
 
     def to_json(self) -> bytes:
         """Transform any Database object into a JSON string."""

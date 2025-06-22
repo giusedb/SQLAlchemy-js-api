@@ -1,6 +1,7 @@
 import asyncio
+from dataclasses import field
 from functools import reduce
-from typing import List
+from typing import List, Tuple, Set
 
 from sqlalchemy import select, delete, or_, and_
 from sqlalchemy.exc import IntegrityError
@@ -12,16 +13,32 @@ from ..context import db
 from pluralizer import Pluralizer
 
 from ..exceptions import RecordNotFound, ResourceNotFoundException
-from ..utils import col2attr, memoize
+from ..utils import col2attr, memoize, async_memoize
 
 pluralizer = Pluralizer()
 pluralize = pluralizer.plural
 
+JS_TYPES = {
+    'biginteger': 'Number',
+    'date': 'Date',
+    'datetime': 'Date',
+    'integer': 'Number',
+    'float': 'Number',
+    'boolean': 'Boolean',
+    'interval': 'Interval',
+    'string': 'String',
+    'text': 'String',
+    'char': 'String',
+    'decimal': 'Number',
+    'json': 'Object',
+    'array': 'Array',
+}
+
 def to_js_type(field_type) -> str:
     """Transform a SQLAlchemy type into a JS type adapter."""
     if isinstance(field_type, type):
-        return field_type.__name__.lower()
-    return type(field_type).__name__.lower()
+        return JS_TYPES[field_type.__name__.lower()]
+    return JS_TYPES[type(field_type).__name__.lower()]
 
 
 def _get_remote(model, prop):
@@ -39,14 +56,14 @@ class DBResource(WebResource):
     """Web Resource based on sqlalchemy model."""
 
     def __init__(self, resource_manager: 'ResourceManager', name: str,
-                 model: DeclarativeBase, permissions: dict = None, columns: list = None,
-                 extras: dict = None, format_string: str = None):
+                 model: DeclarativeBase, permissions: dict = None, columns: Tuple[str] = None,
+                 extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None):
         super(DBResource, self).__init__()
         self.name = name
         self.model = model
         self._permissions = permissions or {}
         self.resource_manager = resource_manager
-        self.columns = columns or [col.name for col in self.model.__table__.columns]
+        self.columns = columns or tuple(col.name for col in self.model.__table__.columns)
         def serialize(obj):
             return {col: getattr(obj, col) for col in self.columns}
         model.__serialize__ = serialize
@@ -55,6 +72,7 @@ class DBResource(WebResource):
                       if prop.direction == RelationshipDirection.MANYTOMANY }
         self.extras = extras or {}
         self.format_string = format_string
+        self.read_only_columns = read_only_columns or ()
 
 
     @property
@@ -140,7 +158,7 @@ class DBResource(WebResource):
     @property
     # @memoize
     def description(self):
-
+        columns = (c for c in self.model.__mapper__.columns if c.name in self.columns)
         def serialize(name, field):
             return {
                 'name': name,
@@ -148,20 +166,21 @@ class DBResource(WebResource):
                 'type': to_js_type(field.type),
                 'extra': self.extras.get(name, {}),
                 'validators': [],  # TODO add validators
+                'writable': name not in self.read_only_columns,
             }
 
         ret = {}
         ret['name'] = self.name
         ret['description'] = self.model.__doc__
         # ret['permissions'] = self._permissions or []
-        ret['fields'] = [serialize(col.key, col) for col in self.model.__mapper__.columns]
+        ret['fields'] = [serialize(col.key, col) for col in columns]
         ret['UID'] = [f.name for f in self.model.__table__.primary_key]
         ret['references'] = tuple(self.references)
         ret['format_string'] = self.format_string
         return ret
 
     @verb
-    # @async_memoize
+    @async_memoize
     async def describe(self):
         await asyncio.sleep(0)
         return {"DESCRIPTION": [self.description]}
@@ -223,9 +242,10 @@ class DBResource(WebResource):
         if not verb:
             raise ResourceNotFoundException(404, f'Method {method} not found on {self.name} resource')
         ret = await verb(keys)
-        if ret:
-            return {'MANYTOMANY': {self.name.lower(): {attribute: ret } } }
-        return ret
+        return m2m.serialize(ret, 'del' if method == 'delete' else 'add')
+
+    def __repr__(self):
+        return f'<DB{self.name.capitalize()}Resource>'
 
 
 class M2MResource:
@@ -234,40 +254,65 @@ class M2MResource:
         """Many to Many container for the DBResource."""
         self.resource_manager = resource.resource_manager
         self.primary_resource = resource
+        self.attribute = prop.key
+        self.prop = prop
         remote_field = _get_remote(resource.model, prop)
         local_field = next(iter((fk.parent for c in remote_field.table.columns
                                  for fk in c.foreign_keys if fk.column.table == resource.model.__table__)))
         self.fields = [local_field, remote_field]
 
-    async def get(self, keys) -> list[list[str]]:
+    def serialize(self, keys: Set[Tuple[str, str]], verb: str):
+        return {'MANYTOMANY': {self.primary_resource.name.lower(): {self.attribute: {verb: list(map(list, keys))}}}}
+
+
+    async def get(self, keys: List[Tuple[str, str]]) -> list[list[str]]:
         """Query the DB to fetch the result items related to `keys."""
         db_result = await db.execute(select(*self.fields).where(self.fields[0].in_(keys)))
-        return list(map(list, db_result))
+        return db_result.all()
 
-    async def add(self, keys: List[tuple[str, str]]) -> list[tuple[str, str]]:
+    async def get_associations(self, keys: List[Tuple[str, str]]) -> Set[Tuple[str, str]]:
+        """Check what pair is stored in the DB starting from the given `keys`."""
+        loc, rem = self.fields
+        return set(await db.execute(select(*self.fields).where(
+            or_(*(and_(loc == l, rem == r) for l, r in keys)))))
+
+    async def get_existings(self, keys: List[Tuple[str, str]]) -> Set[Tuple[str, str]]:
+        """Filter all association causing foreign key violations."""
+        locals, remotes = map(set, zip(*keys))
+        local_field, remote_field = (next(iter(field.foreign_keys)).column for field in self.fields)
+        existing_locals = set((await db.execute(select(local_field).where(local_field.in_(locals)))).scalars().all())
+        existing_remotes = set((await db.execute(select(remote_field).where(remote_field.in_(remotes)))).scalars().all())
+        return {(l, r) for l, r in keys if l in existing_locals and r in existing_remotes}
+
+    async def add(self, keys: Set[Tuple[str, str]]) -> Set[Tuple[str, str]]:
         """Associate a list of related resources to the current one.
 
         keys: list of pairs of local and remote keys.
         """
         loc, rem = self.fields
-        pairs = set(await db.execute(select(*self.fields).where(
-            or_(*(and_(loc == l, rem == r) for l, r in keys)))))
-        pairs = set(map(tuple, keys)) - pairs
-        if pairs:
-            values = [{loc.name: l, rem.name: r} for l, r in pairs]
+        keys = set(map(tuple, keys))
+        to_work = keys - await self.get_associations(keys)
+        if to_work:
+            values = [{loc.name: l, rem.name: r} for l, r in to_work]
             try:
                 await db.execute(loc.table.insert(), values)
             except IntegrityError:
-                raise
-        return await self.get(sorted({k[0] for k in keys}))
-    
-    async def delete(self, keys: List[tuple[str, str]]) -> None:
+                await db.rollback()
+                to_work = await self.get_existings(to_work)
+                if to_work:
+                    await db.execute(loc.table.insert(), [{loc.name: l, rem.name: r} for l, r in to_work])
+            return to_work
+        return set()
+
+    async def delete(self, keys: Set[Tuple[str, str]]) -> Set[Tuple[str, str]]:
         """Dissociate a list of related resources from the current one.
 
         keys: list of pairs of local and remote keys."""
         loc, rem = self.fields
-        try:
-            await db.execute(delete(loc.table).where(or_(*((and_(loc == l, rem == r) for l, r in keys)))))
-        except IntegrityError as e:
-            raise
-        return await self.get(sorted({k[0] for k in keys}))
+        keys = set(map(tuple, keys))
+        to_work = keys.intersection(await self.get_associations(keys))
+        if to_work:
+            values = reduce(or_, (and_(loc == l, rem == r) for l, r in to_work))
+            await db.execute(loc.table.delete().where(values))
+            return to_work
+        return set()
