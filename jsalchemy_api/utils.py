@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime
 from decimal import Decimal
 from functools import wraps
@@ -11,9 +12,9 @@ from sqlalchemy import DateTime, Date, Interval, LargeBinary, DECIMAL
 TYPE_SERIALIZERS = {
     DateTime: lambda x: x and x.timestamp(),
     Date: lambda x: x and datetime.fromordinal(x.toordinal()).timestamp(),
-    Interval: lambda x: x.total_seconds(),
-    Decimal: lambda x: float(x),
-    DECIMAL: lambda x: float(x),
+    Interval: lambda x: x and x.total_seconds(),
+    Decimal: lambda x: x and float(x),
+    DECIMAL: lambda x: x and float(x),
 }
 
 UNSERIALIZABLE_TYPES = {LargeBinary}
@@ -77,6 +78,14 @@ def type_converter(model):
         (name, colnames[name], TYPE_SERIALIZERS.get(type(c.type), lambda x: x))
         for name, c in columns(model).items()
     )
+
+CAP_WORD = re.compile(r'[A-Z][a-z]')
+
+def kebab_case(camel: str) -> str:
+    """Transform any canel case string into a kebab case"""
+    ret = CAP_WORD.sub(lambda x: f'-{x.group().lower()}', camel).lower()
+    return ret[1:] if ret.startswith('-') else ret
+
 
 class JSONMixin:
 

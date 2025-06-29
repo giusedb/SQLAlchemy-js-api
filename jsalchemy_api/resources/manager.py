@@ -11,6 +11,7 @@ from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
 from jsalchemy_authorization import permissions
+from utils import dict_merge
 from ..exceptions import JSAlchemyException
 
 from jsalchemy_api.context.manager import ContextManager, session
@@ -21,9 +22,9 @@ from .db import DBResource
 from ..exceptions import ResourceNotFoundException
 import logging
 
-from ..utils import JSONMixin
+from ..utils import kebab_case
 
-logger = logging.getLogger(__package__)
+log = logging.getLogger('JSAlchemy')
 
 
 class ResourceManager:
@@ -47,7 +48,8 @@ class ResourceManager:
 
     def register(self, resource: WebResource):
         """Register a web resource for getting exposed to the web endpoints."""
-        self.resources[resource.name] = resource
+        log.debug('registering resource "%s"', resource.name)
+        self.resources[kebab_case(resource.name)] = resource
         if isinstance(resource, DBResource):
             self.resources[resource.model] = resource
             self.resources[resource.model.__table__] = resource
@@ -75,7 +77,7 @@ class ResourceManager:
 
     async def action(self, token: str, resource: str, verb: str, *args, **kwargs) -> dict:
         """Finds the correct `resource` and call the right `verb` with `args`."""
-        logger.info(f"received request to {style(verb, 'red')} on {style(resource, 'blue')} from {style(token, 'yellow')}.")
+        log.info(f"received request to {style(verb, 'red')} on {style(resource, 'blue')} from {style(token, 'yellow')}.")
         res = self.resources.get(resource)
         if not res:
             raise ResourceNotFoundException(f'Resource "{resource}" not found')
@@ -104,12 +106,6 @@ class ResourceManager:
     async def logout(self, token: str) -> dict | None:
         return await self.context.web_session_man.logout(token)
 
-    def expose(self, model):
-        """Model decorator to register the model"""
-        resource = DBResource(self, model=model **getattr(model, '__JSAlchemy__', {}))
-        self.register(resource)
-        return model
-
     def __getitem__(self, item: str) -> WebResource:
         """Checks if there is a `Resource` or a `table` with that nema and return the `Resouce"""
         return self.resources.get(item) or self.tables.get(item)
@@ -119,22 +115,30 @@ class ResourceManager:
         return item in self.resources
 
     def expose(self, name: str = None, permissions: dict = None, columns: Tuple[str] = (),
-               format_string:str = None, read_only_columns: Tuple[str]= ()) -> type | Callable:
+               format_string:str = None, read_only_columns: Tuple[str]= (), extras: dict[str, dict[str, object]]=None) -> type | Callable:
         """Expose the model to API."""
         def wrapper(cls):
-            nonlocal name, permissions, columns, format_string, read_only_columns
-            params = ('name', 'permissions', 'columns', 'format_string', 'read_only_columns')
+            nonlocal name, permissions, columns, format_string, read_only_columns, extras
+            params = ('name', 'permissions', 'columns', 'format_string', 'read_only_columns', 'extras')
             exposed = [c.__dict__['__expose__'] for c in reversed(cls.mro()) if '__expose__' in c.__dict__]
+            exposed_fields = [c.__dict__['__expose_fields__'] for c in reversed(cls.mro()) if '__expose_fields__' in c.__dict__]
             reducible = {key: tuple(filter(bool, (c.get(key) for c in exposed))) for key in params}
+            fields_options = reduce(dict_merge, exposed_fields, {})
             if not name:
-                name = reducible['name'] and reducible['name'][0] or cls.__name__.lower()
-            read_only_columns = reduce(lambda x, y: x.union(y),
-                                       map(set, reducible['read_only_columns']), set(read_only_columns))
-            resource = DBResource(self, name=name, model=cls, permissions=permissions,
-                                  columns=columns, format_string=format_string, read_only_columns=read_only_columns)
+                name = reducible['name'] and reducible['name'][0] or cls.__name__
+            read_only_columns = set(reduce(lambda x, y: x.union(y),
+                                           map(set, reducible['read_only_columns']), set(read_only_columns)))
+            read_only_columns.update(
+                {col_name for col_name, option in fields_options.items() if option.get('readonly', False) == True})
+            extras = reduce(lambda x, y: dict_merge(y, x),
+                            reducible['extras'], extras or {})
+            log.info('Extras per %s is %s', name, extras)
+            resource = DBResource(self, name=name, model=cls, permissions=permissions, extras=extras,
+                                  columns=columns, format_string=format_string, read_only_columns=read_only_columns,
+                                  client_field_options=fields_options)
             self.register(resource)
             return cls
         if name and type(name) is type and issubclass(name, DeclarativeBase):
-            cls, name = name, name.__name__.lower()
+            cls, name = name, name.__name__
             return wrapper(cls)
         return wrapper

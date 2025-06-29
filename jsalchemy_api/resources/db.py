@@ -1,8 +1,11 @@
 import asyncio
+import logging
 from dataclasses import field
+from datetime import date, datetime
 from functools import reduce
 from typing import List, Tuple, Set
 
+from click import style
 from sqlalchemy import select, delete, or_, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
@@ -13,25 +16,33 @@ from ..context import db
 from pluralizer import Pluralizer
 
 from ..exceptions import RecordNotFound, ResourceNotFoundException
-from ..utils import col2attr, memoize, async_memoize
+from ..utils import col2attr, async_memoize
 
 pluralizer = Pluralizer()
 pluralize = pluralizer.plural
 
+log = logging.getLogger('JSAlchemy')
+
 JS_TYPES = {
-    'biginteger': 'Number',
-    'date': 'Date',
-    'datetime': 'Date',
-    'integer': 'Number',
-    'float': 'Number',
+    'biginteger': 'Integer',
+    'integer': 'Integer',
+    'float': 'Float',
+    'double': 'Float',
+    'decimal': 'Float',
     'boolean': 'Boolean',
-    'interval': 'Interval',
     'string': 'String',
     'text': 'String',
-    'char': 'String',
-    'decimal': 'Number',
+    'char': 'Char',
+    'date': 'Date',
+    'datetime': 'DateTime',
+    'interval': 'Interval',
     'json': 'Object',
     'array': 'Array',
+}
+
+JS_TYPE_DESERIALIZERS = {
+    'Date': lambda d: d and date.fromtimestamp(d),
+    'DateTime': lambda d: d and datetime.fromtimestamp(d),
 }
 
 def to_js_type(field_type) -> str:
@@ -57,7 +68,8 @@ class DBResource(WebResource):
 
     def __init__(self, resource_manager: 'ResourceManager', name: str,
                  model: DeclarativeBase, permissions: dict = None, columns: Tuple[str] = None,
-                 extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None):
+                 extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None,
+                 client_field_options: dict = None):
         super(DBResource, self).__init__()
         self.name = name
         self.model = model
@@ -73,6 +85,12 @@ class DBResource(WebResource):
         self.extras = extras or {}
         self.format_string = format_string
         self.read_only_columns = read_only_columns or ()
+        self.client_field_options = client_field_options or {}
+        self.type_deserializers = {
+            c.name: JS_TYPE_DESERIALIZERS[to_js_type(c.type)]
+            for c in self.model.__mapper__.columns
+            if c.name in self.columns and to_js_type(c.type) in JS_TYPE_DESERIALIZERS }
+        log.debug('Created resource "%s"', self.name)
 
 
     @property
@@ -160,14 +178,16 @@ class DBResource(WebResource):
     def description(self):
         columns = (c for c in self.model.__mapper__.columns if c.name in self.columns)
         def serialize(name, field):
-            return {
+            ret = {
                 'name': name,
                 'description': field.doc,
                 'type': to_js_type(field.type),
-                'extra': self.extras.get(name, {}),
                 'validators': [],  # TODO add validators
-                'writable': name not in self.read_only_columns,
+                'readonly': name in self.read_only_columns,
             }
+            if name in self.client_field_options:
+                ret.update(self.client_field_options[name])
+            return ret
 
         ret = {}
         ret['name'] = self.name
@@ -189,6 +209,16 @@ class DBResource(WebResource):
         """Get the record object by its primary key."""
         return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalar()
 
+    def deserialize_record(self, record: dict) -> dict:
+        """Clean and transform the `record` according with its type and available columns."""
+        for column, val in tuple(record.items()):
+            if column not in self.columns:
+                log.warning('column "%s" not found, skipping', style(column, fg='red'))
+                del record[column]
+            if column in self.type_deserializers:
+                record[column] = self.type_deserializers[column](val)
+        return record
+
     @verb
     async def get(self, filter: dict | None = None) -> list[DeclarativeBase]:
         """Returns the list of `model`."""
@@ -202,6 +232,7 @@ class DBResource(WebResource):
     @verb
     async def post(self, **record: dict) -> None:
         """Create a new `model` instance on on the database."""
+        self.deserialize_record(record)
         item = self.model(**record)
         db.add(item)
         await db.flush()
@@ -229,7 +260,7 @@ class DBResource(WebResource):
                 RecordNotFound(f'Records {pks} not found')
             raise RecordNotFound(f'Record {pks[0]} not found')
         await db.execute(delete(self.model).where(self.pk.in_(pks)))
-        return {"DELETED": {self.name.lower(): ids}}
+        return {"DELETED": {self.name: ids}}
 
     @verb
     async def m2m(self, attribute: str, method: str, keys):
