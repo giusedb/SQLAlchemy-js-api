@@ -3,6 +3,7 @@ import logging
 from dataclasses import field
 from datetime import date, datetime
 from functools import reduce
+from operator import itemgetter
 from typing import List, Tuple, Set
 
 from click import style
@@ -10,6 +11,7 @@ from sqlalchemy import select, delete, or_, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
 
+from utils import dict_merge
 from .base import WebResource, verb
 from ..context import db
 
@@ -91,7 +93,6 @@ class DBResource(WebResource):
             for c in self.model.__mapper__.columns
             if c.name in self.columns and to_js_type(c.type) in JS_TYPE_DESERIALIZERS }
         log.debug('Created resource "%s"', self.name)
-
 
     @property
     def one_to_many(self) -> List[dict]:
@@ -273,6 +274,11 @@ class DBResource(WebResource):
         if not verb:
             raise ResourceNotFoundException(404, f'Method {method} not found on {self.name} resource')
         ret = await verb(keys)
+        if method == 'set':
+            return dict_merge(
+                m2m.serialize(ret[0], 'del'),
+                m2m.serialize(ret[1], 'add'),
+            )
         return m2m.serialize(ret, 'del' if method == 'delete' else 'add')
 
     def __repr__(self):
@@ -291,10 +297,11 @@ class M2MResource:
         local_field = next(iter((fk.parent for c in remote_field.table.columns
                                  for fk in c.foreign_keys if fk.column.table == resource.model.__table__)))
         self.fields = [local_field, remote_field]
+        self.remote_key = next(iter(remote_field.foreign_keys)).column
+        self.model_key = next(iter(local_field.foreign_keys)).column
 
     def serialize(self, keys: Set[Tuple[str, str]], verb: str):
         return {'MANYTOMANY': {self.primary_resource.name.lower(): {self.attribute: {verb: list(map(list, keys))}}}}
-
 
     async def get(self, keys: List[Tuple[str, str]]) -> list[list[str]]:
         """Query the DB to fetch the result items related to `keys."""
@@ -310,9 +317,10 @@ class M2MResource:
     async def get_existings(self, keys: List[Tuple[str, str]]) -> Set[Tuple[str, str]]:
         """Filter all association causing foreign key violations."""
         locals, remotes = map(set, zip(*keys))
-        local_field, remote_field = (next(iter(field.foreign_keys)).column for field in self.fields)
-        existing_locals = set((await db.execute(select(local_field).where(local_field.in_(locals)))).scalars().all())
-        existing_remotes = set((await db.execute(select(remote_field).where(remote_field.in_(remotes)))).scalars().all())
+        existing_locals = set((await db.execute(
+            select(self.model_key).where(self.model_key.in_(locals)))).scalars().all())
+        existing_remotes = set((await db.execute(
+            select(self.remote_key).where(self.remote_key.in_(remotes)))).scalars().all())
         return {(l, r) for l, r in keys if l in existing_locals and r in existing_remotes}
 
     async def add(self, keys: Set[Tuple[str, str]]) -> Set[Tuple[str, str]]:
@@ -347,3 +355,19 @@ class M2MResource:
             await db.execute(loc.table.delete().where(values))
             return to_work
         return set()
+
+    async def set(self, keys: Set[Tuple[str, str]]) -> Tuple[Set[Tuple[str, str]], Set[Tuple[str, str]]]:
+        """Set the all links in one shot."""
+        loc, rem = self.fields
+        keys = set(map(tuple, keys))
+        existings = set(await db.execute(select(*self.fields).where(loc.in_(set(map(itemgetter(0), keys))))))
+        missing = keys - existings
+        exceeding = existings - keys
+        if exceeding:
+            await db.execute(loc.table.delete().where(
+                reduce(or_, (and_(loc == l, rem == r) for l, r in exceeding))))
+        if missing:
+            missing = await self.get_existings(missing)
+            if missing:
+                await db.execute(loc.table.insert(), [{loc.name: l, rem.name: r} for l, r in missing])
+        return exceeding, missing
