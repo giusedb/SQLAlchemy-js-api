@@ -72,8 +72,12 @@ class ResourceManager:
         if not isinstance(result, Iterable):
             result = [result]
         for item in result:
-            ret[self[item.__table__].name].append(item.to_dict())
-        return dict(ret)
+            resource: WebResource = self.resources.get(type(item))
+            if resource:
+                ret[resource.name].append(resource.serialize(item))
+            if isinstance(item, dict):
+                ret = dict_merge(ret, item)
+        return ret
 
     async def action(self, token: str, resource: str, verb: str, *args, **kwargs) -> dict:
         """Finds the correct `resource` and call the right `verb` with `args`."""

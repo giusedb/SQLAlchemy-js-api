@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from dataclasses import field
 from datetime import date, datetime
 from functools import reduce
 from operator import itemgetter
@@ -40,6 +39,11 @@ JS_TYPES = {
     'interval': 'Interval',
     'json': 'Object',
     'array': 'Array',
+}
+
+JS_TYPE_SERIALIZERS = {
+    'Date': lambda d: d and d.timestamp(),
+    'DateTime': lambda d: d and d.timestamp(),
 }
 
 JS_TYPE_DESERIALIZERS = {
@@ -92,6 +96,10 @@ class DBResource(WebResource):
             c.name: JS_TYPE_DESERIALIZERS[to_js_type(c.type)]
             for c in self.model.__mapper__.columns
             if c.name in self.columns and to_js_type(c.type) in JS_TYPE_DESERIALIZERS }
+        self.type_serializers = {
+            c.name: JS_TYPE_SERIALIZERS[to_js_type(c.type)]
+            for c in self.model.__mapper__.columns
+            if c.name in self.columns and to_js_type(c.type) in JS_TYPE_SERIALIZERS }
         log.debug('Created resource "%s"', self.name)
 
     @property
@@ -209,6 +217,14 @@ class DBResource(WebResource):
     async def by_pk(self, *pks):
         """Get the record object by its primary key."""
         return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalar()
+
+    def serialize(self, record) -> dict:
+        """Clean and transform the `record` according with its type and available columns."""
+        return {
+            col: self.type_serializers[col](getattr(record, col))
+            if col in self.type_serializers else getattr(record, col)
+            for col in self.columns
+        }
 
     def deserialize_record(self, record: dict) -> dict:
         """Clean and transform the `record` according with its type and available columns."""

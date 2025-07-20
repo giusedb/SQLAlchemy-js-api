@@ -46,3 +46,6 @@ class WebResource(metaclass=Verbal):
     @property
     def pydantic(self):
         raise NotImplementedError()
+
+    def serialize(self, obj) -> dict:
+        raise NotImplementedError()
