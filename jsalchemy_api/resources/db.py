@@ -16,7 +16,7 @@ from ..context import db
 
 from pluralizer import Pluralizer
 
-from ..exceptions import RecordNotFound, ResourceNotFoundException
+from ..exceptions import RecordNotFound, ResourceNotFoundException, ValidationError, HandledValidation
 from ..utils import col2attr, async_memoize
 
 pluralizer = Pluralizer()
@@ -259,6 +259,9 @@ class DBResource(WebResource):
     async def put(self, **record: dict) -> None:
         """Update the record on the DB."""
         pk = record.pop(self.description['UID'][0])
+        errors = self.validate(record)
+        if errors:
+            raise HandledValidation(errors)
         rec = await self.by_pk(pk)
         if not rec:
             raise RecordNotFound(f'Record {pk} not found')
@@ -296,6 +299,17 @@ class DBResource(WebResource):
                 m2m.serialize(ret[1], 'add'),
             )
         return m2m.serialize(ret, 'del' if method == 'delete' else 'add')
+
+    def validate(self, record: dict):
+        ret = {}
+        for attr, value in tuple(record.items()):
+            validator = getattr(self, f"validate_{attr}", None)
+            if validator:
+                try:
+                    record[attr] = validator(value)
+                except ValidationError as e:
+                    ret[attr] = e.message
+        return ret
 
     def __repr__(self):
         return f'<DB{self.name.capitalize()}Resource>'

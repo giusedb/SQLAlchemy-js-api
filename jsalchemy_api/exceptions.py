@@ -24,3 +24,13 @@ class SessionNotFound(JSAlchemyException):
 class RecordNotFound(JSAlchemyException):
 
     status_code = 404
+
+
+class ValidationError(JSAlchemyException):
+    status_code = 419
+
+class HandledValidation(JSAlchemyException):
+
+    def __init__(self, errors: dict):
+        self.errors = errors
+        self.status_code = 409

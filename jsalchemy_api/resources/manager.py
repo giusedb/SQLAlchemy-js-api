@@ -12,7 +12,7 @@ from typing_extensions import Callable
 
 from jsalchemy_authorization import permissions
 from utils import dict_merge
-from ..exceptions import JSAlchemyException
+from ..exceptions import JSAlchemyException, HandledValidation
 
 from jsalchemy_api.context.manager import ContextManager, session
 from jsalchemy_authentication.manager import AuthenticationManager
@@ -90,8 +90,17 @@ class ResourceManager:
             raise ResourceNotFoundException(f'Verb {resource}.{verb} not found')
 
         async with self.context(token) as ctx:
-            result = await action(*args, **kwargs)
-            return self.serialize_results(result)
+            try:
+                result = await action(*args, **kwargs)
+                return self.serialize_results(result)
+            except HandledValidation as e:
+                return {
+                    '$validation': {
+                        'errors': e.errors,
+                        'resource': resource,
+                        'verb': verb
+                    }
+                }
 
     async def login(self, username: str, password: str) -> dict | None:
         """Log in the user and return the status object."""
