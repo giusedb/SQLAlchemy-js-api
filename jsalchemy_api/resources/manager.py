@@ -92,7 +92,9 @@ class ResourceManager:
         async with self.context(token) as ctx:
             try:
                 result = await action(*args, **kwargs)
-                return self.serialize_results(result)
+                if action.serialize_results:
+                    return self.serialize_results(result)
+                return result
             except HandledValidation as e:
                 return {
                     '$validation': {

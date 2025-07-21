@@ -1,17 +1,29 @@
 from abc import ABCMeta
+from functools import wraps
 from types import FunctionType
 
 
-def verb(func: FunctionType) -> FunctionType:
-    def serialize(result):
-        return []
+def verb(name: str | FunctionType = None, direct_return: bool = False,
+         detached_instance: bool = False) -> FunctionType:
 
-    def wrapper(*args, **kwargs):
-        return serialize(func(*args, **kwargs))
+    def decorator(func):
+        @wraps(name)
+        async def get_instance(self, pk, *args, **kwargs):
+            instance = await self.by_pk(pk)
+            return await func(self, instance, *args, **kwargs)
 
-    func.is_verb = True
-    func.call = wrapper
-    return func
+        if not detached_instance:
+            get_instance.is_verb = True
+            get_instance.serialize_results = not direct_return
+            get_instance.orig_func = func
+            return get_instance
+
+        func.is_verb = True
+        func.orig_func = func
+        func.serialize_results = not direct_return
+        return func
+
+    return decorator(name) if type(name) is FunctionType else decorator
 
 
 class Verbal(type):

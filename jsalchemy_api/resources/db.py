@@ -1,9 +1,10 @@
 import asyncio
+import inspect
 import logging
 from datetime import date, datetime
 from functools import reduce
 from operator import itemgetter
-from typing import List, Tuple, Set
+from typing import List, Tuple, Set, Any, Dict
 
 from click import style
 from sqlalchemy import select, delete, or_, and_
@@ -17,7 +18,7 @@ from ..context import db
 from pluralizer import Pluralizer
 
 from ..exceptions import RecordNotFound, ResourceNotFoundException, ValidationError, HandledValidation
-from ..utils import col2attr, async_memoize
+from ..utils import col2attr, async_memoize, camelize
 
 pluralizer = Pluralizer()
 pluralize = pluralizer.plural
@@ -67,7 +68,6 @@ def _get_remote(model, prop):
     else:
         local, remote = reversed(pair)
     return remote
-
 
 class DBResource(WebResource):
     """Web Resource based on sqlalchemy model."""
@@ -183,6 +183,24 @@ class DBResource(WebResource):
             yield serialize(prop.key, prop)
 
     @property
+    def verbs(self) -> List[Dict[str, Any]]:
+        default_verbs = 'get', 'put', 'post', 'delete', 'm2m', 'describe', 'permissions'
+        def serialize(name, verb) -> Dict[str, Any]:
+            args = inspect.getfullargspec(verb.orig_func)
+            defaults = dict_merge(
+                dict(zip(*map(reversed, (args.args, args.defaults or ())))),
+                args.kwonlydefaults or {})
+            return {
+                'name': name,
+                'is_instance': True,
+                'args': args.args[2:],
+                'defaults': defaults,
+                'detatchReturn': verb.serialize_results
+            }
+        return [serialize(name, verb) for name, verb in self.__class__.__dict__.items()
+                if hasattr(verb, 'is_verb') and name not in default_verbs]
+
+    @property
     # @memoize
     def description(self):
         columns = (c for c in self.model.__mapper__.columns if c.name in self.columns)
@@ -206,9 +224,10 @@ class DBResource(WebResource):
         ret['UID'] = [f.name for f in self.model.__table__.primary_key]
         ret['references'] = tuple(self.references)
         ret['format_string'] = self.format_string
+        ret['verbs'] = self.verbs
         return ret
 
-    @verb
+    @verb(detached_instance=True)
     @async_memoize
     async def describe(self):
         await asyncio.sleep(0)
@@ -236,7 +255,7 @@ class DBResource(WebResource):
                 record[column] = self.type_deserializers[column](val)
         return record
 
-    @verb
+    @verb(detached_instance=True)
     async def get(self, filter: dict | None = None) -> list[DeclarativeBase]:
         """Returns the list of `model`."""
         query = select(self.model)
@@ -246,7 +265,7 @@ class DBResource(WebResource):
         data = await db.execute(query)
         return data.scalars().all()
 
-    @verb
+    @verb(detached_instance=True)
     async def post(self, **record: dict) -> None:
         """Create a new `model` instance on on the database."""
         self.deserialize_record(record)
@@ -255,7 +274,7 @@ class DBResource(WebResource):
         await db.flush()
         return item
 
-    @verb
+    @verb(detached_instance=True)
     async def put(self, **record: dict) -> None:
         """Update the record on the DB."""
         pk = record.pop(self.description['UID'][0])
@@ -271,7 +290,7 @@ class DBResource(WebResource):
         db.flush()
         return rec
 
-    @verb
+    @verb(detached_instance=True)
     async def delete(self, pks: List[str]) -> None:
         """Delete the record on the DB."""
         ids = tuple((await db.execute(select(self.pk).where(self.pk.in_(pks)))).scalars())
@@ -282,7 +301,7 @@ class DBResource(WebResource):
         await db.execute(delete(self.model).where(self.pk.in_(pks)))
         return {"DELETED": {self.name: ids}}
 
-    @verb
+    @verb(detached_instance=True)
     async def m2m(self, attribute: str, method: str, keys):
         if attribute not in self.m2ms:
             raise ResourceNotFoundException(404, f'Attribute {attribute} not found on {self.name} resource')

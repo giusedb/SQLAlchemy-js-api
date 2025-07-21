@@ -86,6 +86,11 @@ def kebab_case(camel: str) -> str:
     ret = CAP_WORD.sub(lambda x: f'-{x.group().lower()}', camel).lower()
     return ret[1:] if ret.startswith('-') else ret
 
+def camelize(snake: str) -> str:
+    """Transform any snake case string into a camel case"""
+    ret = ''.join(x.title() for x in snake.split('_'))
+    return ret[0].lower() + ret[1:]
+
 
 class JSONMixin:
 
