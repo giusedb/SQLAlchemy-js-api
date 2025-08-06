@@ -4,7 +4,6 @@ from functools import reduce
 from typing import Iterable, Tuple
 
 from click import style
-from jinja2.runtime import exported
 from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
