@@ -5,7 +5,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from jsalchemy_api.context.manager import ContextManager
+from jsalchemy_web_context import ContextManager
 from jsalchemy_api.resources.manager import ResourceManager
 
 

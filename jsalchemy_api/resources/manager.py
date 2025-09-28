@@ -5,17 +5,14 @@ from typing import Iterable, Tuple
 
 from click import style
 from redis import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
-from jsalchemy_authorization import permissions
 from utils import dict_merge
-from ..exceptions import JSAlchemyException, HandledValidation
+from ..exceptions import HandledValidation
 
-from jsalchemy_api.context.manager import ContextManager, session
+from jsalchemy_web_context import ContextManager, session
 from jsalchemy_authentication.manager import AuthenticationManager
-from jsalchemy_authorization.models import UserMixin
 from .base import WebResource  # pylint disable=relative-beyond-top-level
 from .db import DBResource
 from ..exceptions import ResourceNotFoundException
@@ -37,7 +34,7 @@ class ResourceManager:
                  session_maker: Callable | None = None,
                  redis_connection: Redis | str | None = None,
                  name: str | None = None):
-        self.context = ContextManager(self, session_maker, redis_connection)
+        self.context = ContextManager(session_maker, redis_connection)
         self.auth_man = auth_man
         self.last_run = time.time()
         self.app_name = name or 'no-name'

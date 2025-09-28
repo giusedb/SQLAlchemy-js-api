@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import Mapped, DeclarativeBase, mapped_column
 from datetime import date
 from sqlalchemy import select
-from jsalchemy_api.context import db
+from jsalchemy_web_context import db
 import asyncio
 
 from jsalchemy_api.resources.manager import ResourceManager

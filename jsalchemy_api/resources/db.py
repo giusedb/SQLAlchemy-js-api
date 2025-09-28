@@ -13,7 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipP
 
 from utils import dict_merge
 from .base import WebResource, verb
-from ..context import db
+from jsalchemy_web_context import db
 
 from pluralizer import Pluralizer
 
