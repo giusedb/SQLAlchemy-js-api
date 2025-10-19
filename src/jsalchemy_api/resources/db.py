@@ -13,15 +13,10 @@ from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipP
 
 from utils import dict_merge
 from .base import WebResource, verb
-from jsalchemy_web_context import db
-
-from pluralizer import Pluralizer
+from jsalchemy_web_context import db, request
 
 from ..exceptions import RecordNotFound, ResourceNotFoundException, ValidationError, HandledValidation
-from ..utils import col2attr, async_memoize, camelize
-
-pluralizer = Pluralizer()
-pluralize = pluralizer.plural
+from ..utils import col2attr, async_memoize, camelize, memoize
 
 log = logging.getLogger('JSAlchemy')
 
@@ -40,6 +35,14 @@ JS_TYPES = {
     'interval': 'Interval',
     'json': 'Object',
     'array': 'Array',
+    'clob': 'String',
+    'blob': 'String',
+    'largebinary': 'String',
+    'uuid': 'String',
+    'tuple': 'Array',
+    'pickletype': 'Object',
+    'smallinteger': 'Integer',
+    'tupletype': 'Array',
 }
 
 JS_TYPE_SERIALIZERS = {
@@ -75,8 +78,9 @@ class DBResource(WebResource):
     def __init__(self, resource_manager: 'ResourceManager', name: str,
                  model: DeclarativeBase, permissions: dict = None, columns: Tuple[str] = None,
                  extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None,
-                 client_field_options: dict = None):
+                 client_field_options: dict = None, desc: str = ''):
         super(DBResource, self).__init__()
+        self._description = None
         self.name = name
         self.model = model
         self._permissions = permissions or {}
@@ -92,6 +96,7 @@ class DBResource(WebResource):
         self.format_string = format_string
         self.read_only_columns = read_only_columns or ()
         self.client_field_options = client_field_options or {}
+        self.desc = desc
         self.type_deserializers = {
             c.name: JS_TYPE_DESERIALIZERS[to_js_type(c.type)]
             for c in self.model.__mapper__.columns
@@ -101,6 +106,7 @@ class DBResource(WebResource):
             for c in self.model.__mapper__.columns
             if c.name in self.columns and to_js_type(c.type) in JS_TYPE_SERIALIZERS }
         log.debug('Created resource "%s"', self.name)
+        self.resource_manager.register(self)
 
     @property
     def one_to_many(self) -> List[dict]:
@@ -201,37 +207,36 @@ class DBResource(WebResource):
                 if hasattr(verb, 'is_verb') and name not in default_verbs]
 
     @property
-    # @memoize
     def description(self):
-        columns = (c for c in self.model.__mapper__.columns if c.name in self.columns)
-        def serialize(name, field):
-            ret = {
-                'name': name,
-                'description': field.doc,
-                'type': to_js_type(field.type),
-                'validators': [],  # TODO add validators
-                'readonly': name in self.read_only_columns,
-            }
-            if name in self.client_field_options:
-                ret.update(self.client_field_options[name])
-            return ret
+        if not self._description:
+            columns = (c for c in self.model.__mapper__.columns if c.name in self.columns)
+            def serialize(name, field):
+                ret = {
+                    'name': name,
+                    'description': field.comment,
+                    'type': to_js_type(field.type),
+                    'validators': [],  # TODO add validators
+                    'readonly': name in self.read_only_columns,
+                }
+                if name in self.client_field_options:
+                    ret.update(self.client_field_options[name])
+                return ret
 
-        ret = {}
-        ret['name'] = self.name
-        ret['description'] = self.model.__doc__
-        # ret['permissions'] = self._permissions or []
-        ret['fields'] = [serialize(col.key, col) for col in columns]
-        ret['UID'] = [f.name for f in self.model.__table__.primary_key]
-        ret['references'] = tuple(self.references)
-        ret['format_string'] = self.format_string
-        ret['verbs'] = self.verbs
-        return ret
+            ret = {}
+            ret['name'] = self.name
+            ret['description'] = self.desc or self.model.__doc__
+            # ret['permissions'] = self._permissions or []
+            ret['fields'] = [serialize(col.key, col) for col in columns]
+            ret['$pk'] = [f.name for f in self.model.__table__.primary_key]
+            ret['references'] = list(self.references)
+            ret['format_string'] = self.format_string
+            ret['verbs'] = self.verbs
+            self._description = ret
+        return self._description
 
     @verb(detached_instance=True)
-    @async_memoize
-    async def describe(self):
-        await asyncio.sleep(0)
-        return {"DESCRIPTION": [self.description]}
+    async def describe(self) -> None:
+        request.result.description.append(self.description)
 
     async def by_pk(self, *pks):
         """Get the record object by its primary key."""
@@ -260,10 +265,18 @@ class DBResource(WebResource):
         """Returns the list of `model`."""
         query = select(self.model)
         if filter:
-            query = query.where(reduce(and_, (
-                getattr(self.model, name).in_(val) for name, val in filter.items())))
+            if len(filter) == 1 and len(next(iter(filter.values()))) == 1:
+                key = next(iter(filter))
+                val = filter[key][0]
+                if val == None:
+                    query = query.where(getattr(self.model, key).is_(None))
+                else:
+                    query = query.where(getattr(self.model, key) == val)
+            else:
+                query = query.where(reduce(and_, (
+                    getattr(self.model, name).in_(val) for name, val in filter.items())))
         data = await db.execute(query)
-        return data.scalars().all()
+        request.result.new.update(set(data.scalars().all()))
 
     @verb(detached_instance=True)
     async def post(self, **record: dict) -> None:
@@ -271,13 +284,11 @@ class DBResource(WebResource):
         self.deserialize_record(record)
         item = self.model(**record)
         db.add(item)
-        await db.flush()
-        return item
 
     @verb(detached_instance=True)
     async def put(self, **record: dict) -> None:
         """Update the record on the DB."""
-        pk = record.pop(self.description['UID'][0])
+        pk = record.pop(self.model.__mapper__.primary_key[0].key)
         errors = self.validate(record)
         if errors:
             raise HandledValidation(errors)
@@ -287,8 +298,6 @@ class DBResource(WebResource):
         for attr, value in record.items():
             # TODO limit the updates to the writable fields
             setattr(rec, attr, value)
-        db.flush()
-        return rec
 
     @verb(detached_instance=True)
     async def delete(self, pks: List[str]) -> None:
@@ -299,7 +308,7 @@ class DBResource(WebResource):
                 RecordNotFound(f'Records {pks} not found')
             raise RecordNotFound(f'Record {pks[0]} not found')
         await db.execute(delete(self.model).where(self.pk.in_(pks)))
-        return {"DELETED": {self.name: ids}}
+        request.result.delete.update(((self.name, id) for id in ids))
 
     @verb(detached_instance=True)
     async def m2m(self, attribute: str, method: str, keys):

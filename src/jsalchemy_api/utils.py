@@ -3,9 +3,10 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from functools import wraps
-from typing import Tuple
+from itertools import groupby
+from typing import Tuple, Iterable
 
-from orjson.orjson import dumps
+# from orjson.orjson import dumps
 from sqlalchemy.orm import ColumnProperty, DeclarativeBase
 from sqlalchemy import DateTime, Date, Interval, LargeBinary, DECIMAL
 
@@ -104,3 +105,19 @@ class JSONMixin:
     def to_json(self) -> bytes:
         """Transform any Database object into a JSON string."""
         return dumps(self.to_dict())
+
+def dict_diff(a: dict, b: dict):
+    """Returns the difference between two dictionaries."""
+    return {k: v for k, v in b.items() if k not in a or a[k] != b[k]}
+
+def model_group(items: Iterable[DeclarativeBase], resource_manager=None):
+    """Group items by model."""
+    sorted_items = sorted(items, key=lambda o: type(o).__name__)
+    ret = {}
+    if resource_manager:
+        for model, items in groupby(sorted_items, type):
+            resource = resource_manager.resources[model]
+            ret[resource.name] = list(map(resource.serialize, items))
+    else:
+        ret = {type(o).__name__: list(items) for o in sorted_items}
+    return ret

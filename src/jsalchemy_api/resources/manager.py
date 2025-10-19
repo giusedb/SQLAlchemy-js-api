@@ -1,6 +1,7 @@
 import time
 from collections import defaultdict
 from functools import reduce
+from itertools import groupby
 from typing import Iterable, Tuple
 
 from click import style
@@ -8,20 +9,21 @@ from redis import Redis
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
+from jsalchemy_auth.sync.models import UserMixin
 from utils import dict_merge
 from ..exceptions import HandledValidation
 
-from jsalchemy_web_context import ContextManager, session
+from jsalchemy_web_context import ContextManager, session, request, db
 from jsalchemy_authentication.manager import AuthenticationManager
-from .base import WebResource  # pylint disable=relative-beyond-top-level
+from .base import WebResource, ResultData  # pylint disable=relative-beyond-top-level
 from .db import DBResource
 from ..exceptions import ResourceNotFoundException
 import logging
 
-from ..utils import kebab_case
+from ..interceptors import ChangeInterceptor
+from ..utils import kebab_case, model_group
 
 log = logging.getLogger('JSAlchemy')
-
 
 class ResourceManager:
     """The global resource manager, which manages all registered resources."""
@@ -31,13 +33,15 @@ class ResourceManager:
 
     def __init__(self,
                  auth_man: AuthenticationManager,
-                 session_maker: Callable | None = None,
-                 redis_connection: Redis | str | None = None,
-                 name: str | None = None):
-        self.context = ContextManager(session_maker, redis_connection)
+                 context: ContextManager,
+                 name: str | None = None,
+                 description: str = ''):
+        self.context = context
         self.auth_man = auth_man
         self.last_run = time.time()
         self.app_name = name or 'no-name'
+        self.description = description
+        self.interceptor = ChangeInterceptor(self)
 
     def __call__(self, token=None):
         return self.context(token)
@@ -46,10 +50,11 @@ class ResourceManager:
         """Register a web resource for getting exposed to the web endpoints."""
         log.debug('registering resource "%s"', resource.name)
         self.resources[kebab_case(resource.name)] = resource
-        if isinstance(resource, DBResource):
+        if isinstance(resource, DBResource) and resource.model not in self.resources:
             self.resources[resource.model] = resource
             self.resources[resource.model.__table__] = resource
             self.tables[resource.model.__table__.name] = resource
+            self.interceptor.register_model(resource.model)
 
     @property
     def foreign_keys(self):
@@ -58,22 +63,34 @@ class ResourceManager:
                 if fk.constraint.table.name in self.tables
                 and fk.column.table.name in self.tables)
 
-    def serialize_results(self, result: Iterable) -> dict:
-        if not result:
-            return {}
-        if isinstance(result, dict):
-            return result
+    def _deep_serialize(self, item):
+        if isinstance(item, dict):
+            return {k: self._deep_serialize(v) for k, v in item.items()}
+        elif isinstance(item, (list, tuple, set)):
+            return [self._deep_serialize(v) for v in item]
+        elif isinstance(item, DeclarativeBase):
+            titem = type(item)
+            resource = self.resources.get()
+            if not resource:
+                raise TypeError(f'type {type(item)} not serializable.')
+            if item.id in request.result['data'].get(titem.__name__, {}):
+                return {'$ref': [titem.__name__, item.id]}
+            return self.resources[type(item)].serialize(item)
+        else:
+            return item
 
-        ret = defaultdict(list)
-        if not isinstance(result, Iterable):
-            result = [result]
-        for item in result:
-            resource: WebResource = self.resources.get(type(item))
-            if resource:
-                ret[resource.name].append(resource.serialize(item))
-            if isinstance(item, dict):
-                ret = dict_merge(ret, item)
+    def serialize_results(self, result: Iterable) -> dict:
+        """Compose the action's return dict"""
+        req: ResultData = request.result
+        ret = req.to_dict(self)
+        if result:
+            ret['payload'] = self._deep_serialize(result)
         return ret
+
+    @property
+    def models(self):
+        """Return all registered models."""
+        return {r.model for r in self.resources.values() if isinstance(r, DBResource)}
 
     async def action(self, token: str, resource: str, verb: str, *args, **kwargs) -> dict:
         """Finds the correct `resource` and call the right `verb` with `args`."""
@@ -87,10 +104,11 @@ class ResourceManager:
 
         async with self.context(token) as ctx:
             try:
+                self.interceptor.start_record()
+                request.result = ResultData()
                 result = await action(*args, **kwargs)
-                if action.serialize_results:
-                    return self.serialize_results(result)
-                return result
+                await db.commit()
+                return self.serialize_results(result)
             except HandledValidation as e:
                 return {
                     '$validation': {
@@ -103,19 +121,26 @@ class ResourceManager:
     async def login(self, username: str, password: str) -> dict | None:
         """Log in the user and return the status object."""
         user = await self.auth_man.login(username, password)
+        if not user:
+            raise HandledValidation({self.auth_man.unid: 'Invalid credentials'})
         token, _ = await self.context.web_session_man.new()
         async with self.context(token) as ctx:
-            session.user = user
+            session.user_id = user.id
         if user:
             return {
-                'user': user.to_dict(),
                 'last_build': self.last_run,
                 'token': token,
-                'application': self.app_name
+                'application': self.app_name,
+                'user_id': user.id,
+                'user': { c.name: getattr(user, c.name) for c in user.__table__.columns if c.name != 'password'}
             }
 
     async def logout(self, token: str) -> dict | None:
-        return await self.context.web_session_man.logout(token)
+        try:
+            await self.context.destroy(token)
+            return 'Ok'
+        except Exception:
+            return 'Session not found'
 
     def __getitem__(self, item: str) -> WebResource:
         """Checks if there is a `Resource` or a `table` with that nema and return the `Resouce"""

@@ -1,16 +1,16 @@
 [tool.poetry]
 name = "sqlalchemy-js-api"
-version = "0.1.0"
+version = "0.1.1"
 description = ""
 authors = ["Giuseppe Di Bona <giusedb@gmail.com>"]
 readme = "README.md"
-packages = [{include = "jsalchemy_api"}]
+packages = [{include = "jsalchemy_api", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
 redis = "^6.2.1"
 sqlalchemy = ">=2.0"
-aioredis = "^2.0.1"
+click = "^8.3.0"
 
 
 [tool.poetry.group.devel.dependencies]
@@ -25,6 +25,8 @@ pytest-mockredis = "^0.1.6"
 mockaioredis = "^0.0.16"
 aiosqlite = "^0.20.0"
 greenlet = "^3.1.1"
+pytest-asyncio = "^1.2.0"
+fakeredis = "^2.32.0"
 
 [build-system]
 requires = ["poetry-core"]
