@@ -95,6 +95,7 @@ class DBResource(WebResource):
         self.extras = extras or {}
         self.format_string = format_string
         self.read_only_columns = read_only_columns or ()
+        self.writable_fields = set(self.columns) - set(self.read_only_columns)
         self.client_field_options = client_field_options or {}
         self.desc = desc
         self.type_deserializers = {
@@ -289,6 +290,7 @@ class DBResource(WebResource):
     async def put(self, **record: dict) -> None:
         """Update the record on the DB."""
         pk = record.pop(self.model.__mapper__.primary_key[0].key)
+        record = self.deserialize_record(record)
         errors = self.validate(record)
         if errors:
             raise HandledValidation(errors)
@@ -296,8 +298,8 @@ class DBResource(WebResource):
         if not rec:
             raise RecordNotFound(f'Record {pk} not found')
         for attr, value in record.items():
-            # TODO limit the updates to the writable fields
-            setattr(rec, attr, value)
+            if attr in self.writable_fields:
+                setattr(rec, attr, value)
 
     @verb(detached_instance=True)
     async def delete(self, pks: List[str]) -> None:

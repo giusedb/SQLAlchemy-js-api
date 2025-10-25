@@ -37,7 +37,7 @@ def base_environment(config: Dict[str, Any], sync: bool = False):
         redis_connection = Redis.from_url(redis_url, **redis_config)
     else:
         redis_connection = Redis(**redis_config)
-    context_manager = ContextManager(session_maker, redis_connection)
+    context_manager = ContextManager(session_maker, redis_connection, auto_commit=True, trace_changes=True)
     return context_manager
 
 def setup_application(config: Dict[str, Any]) -> ResourceManager:

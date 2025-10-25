@@ -1,27 +1,25 @@
 import time
-from collections import defaultdict
 from functools import reduce
 from itertools import groupby
+from operator import itemgetter
 from typing import Iterable, Tuple
 
 from click import style
-from redis import Redis
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
-from jsalchemy_auth.sync.models import UserMixin
+from jsalchemy_web_context.interceptors import ResultData
 from utils import dict_merge
 from ..exceptions import HandledValidation
 
 from jsalchemy_web_context import ContextManager, session, request, db
 from jsalchemy_authentication.manager import AuthenticationManager
-from .base import WebResource, ResultData  # pylint disable=relative-beyond-top-level
+from .base import WebResource  # pylint disable=relative-beyond-top-level
 from .db import DBResource
 from ..exceptions import ResourceNotFoundException
 import logging
 
-from ..interceptors import ChangeInterceptor
-from ..utils import kebab_case, model_group
+from ..utils import kebab_case, model_group, dict_diff
 
 log = logging.getLogger('JSAlchemy')
 
@@ -41,7 +39,6 @@ class ResourceManager:
         self.last_run = time.time()
         self.app_name = name or 'no-name'
         self.description = description
-        self.interceptor = ChangeInterceptor(self)
 
     def __call__(self, token=None):
         return self.context(token)
@@ -54,7 +51,7 @@ class ResourceManager:
             self.resources[resource.model] = resource
             self.resources[resource.model.__table__] = resource
             self.tables[resource.model.__table__.name] = resource
-            self.interceptor.register_model(resource.model)
+            self.context.change_interceptor.register_model(resource.model)
 
     @property
     def foreign_keys(self):
@@ -70,19 +67,32 @@ class ResourceManager:
             return [self._deep_serialize(v) for v in item]
         elif isinstance(item, DeclarativeBase):
             titem = type(item)
-            resource = self.resources.get()
+            resource = self.resources.get(titem)
             if not resource:
                 raise TypeError(f'type {type(item)} not serializable.')
-            if item.id in request.result['data'].get(titem.__name__, {}):
-                return {'$ref': [titem.__name__, item.id]}
-            return self.resources[type(item)].serialize(item)
+            return {'$ref': [titem.__name__, item.id]}
         else:
             return item
 
     def serialize_results(self, result: Iterable) -> dict:
         """Compose the action's return dict"""
+        ret = {}
         req: ResultData = request.result
-        ret = req.to_dict(self)
+        if 'description' in req.extra:
+            ret['description'] = {desc['name']: desc for desc in req.extra['description']}
+        if req.update:
+            updated = { model.__name__: {pk: diff for pk, diff in items.items() if pk in self.resources[model].columns}
+                        for model, items in req.update_diff().items() }
+            if updated:
+                ret['updated'] = updated
+        if req.new:
+            ret['new'] = model_group(req.new, self)
+        if req.delete:
+            ret['delete'] = {
+                res: list(map(itemgetter(1), grp))
+                for res, grp in groupby(sorted(self.delete, key=itemgetter(0)), itemgetter(0)) }
+        if req.m2m:
+            ret['m2m'] = self.m2m
         if result:
             ret['payload'] = self._deep_serialize(result)
         return ret
@@ -104,10 +114,7 @@ class ResourceManager:
 
         async with self.context(token) as ctx:
             try:
-                self.interceptor.start_record()
-                request.result = ResultData()
                 result = await action(*args, **kwargs)
-                await db.commit()
                 return self.serialize_results(result)
             except HandledValidation as e:
                 return {
