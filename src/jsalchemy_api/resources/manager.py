@@ -1,16 +1,11 @@
 import time
-from collections import defaultdict
 from functools import reduce
-from itertools import groupby
 from typing import Iterable, Tuple
 
 from click import style
-from redis import Redis
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
-from jsalchemy_auth.sync.models import UserMixin
-from utils import dict_merge
 from ..exceptions import HandledValidation
 
 from jsalchemy_web_context import ContextManager, session, request, db
@@ -21,7 +16,7 @@ from ..exceptions import ResourceNotFoundException
 import logging
 
 from ..interceptors import ChangeInterceptor
-from ..utils import kebab_case, model_group
+from ..utils import kebab_case, dict_merge
 
 log = logging.getLogger('JSAlchemy')
 

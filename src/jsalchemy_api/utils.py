@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from functools import wraps
 from itertools import groupby
-from typing import Tuple, Iterable
+from typing import Tuple, Iterable, Callable
 
 # from orjson.orjson import dumps
 from sqlalchemy.orm import ColumnProperty, DeclarativeBase
@@ -121,3 +121,29 @@ def model_group(items: Iterable[DeclarativeBase], resource_manager=None):
     else:
         ret = {type(o).__name__: list(items) for o in sorted_items}
     return ret
+
+def _dict_merge(a: dict, b: dict, reduce_func: Callable = None) -> dict:
+    sa, sb = map(set, (a, b))
+    a_only, b_only = sa - sb, sb - sa
+    both = sa.intersection(sb)
+    for key in a_only:
+        yield key, a[key]
+    for key in b_only:
+        yield key, b[key]
+    for key in both:
+        value = a[key]
+        if isinstance(value, dict):
+            yield key, dict(_dict_merge(value, b[key], reduce_func))
+        elif reduce_func:
+            yield key, reduce_func(value, b[key])
+        else:
+            yield key, value
+
+def dict_merge(a: dict, b: dict, reduce_func: Callable = None) -> dict:
+    return dict(_dict_merge(a, b, reduce_func))
+
+def load_class(class_path: str) -> type:
+    full_path = class_path.rsplit('.')
+    class_name = full_path.pop()
+    module = __import__('.'.join(full_path), fromlist=[class_name])
+    return getattr(module, class_name)

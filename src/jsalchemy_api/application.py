@@ -5,7 +5,7 @@ from sqlalchemy import Select, false
 
 from jsalchemy_api import ResourceManager
 from jsalchemy_auth.models import UserMixin
-from utils import load_class
+from jsalchemy_api.utils import load_class
 
 def print_SQL(query):
     return str(query.compile(compile_kwargs={'literal_binds': True}))
@@ -13,7 +13,7 @@ def print_SQL(query):
 Select.__str__ = Select.__repr__ = print_SQL
 
 
-def base_environment(config: Dict[str, Any], sync: bool = False):
+def base_environment(config: Dict[str, Any], sync: bool = False, auto_commit=False):
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     if sync:
         from redis import Redis
@@ -37,7 +37,7 @@ def base_environment(config: Dict[str, Any], sync: bool = False):
         redis_connection = Redis.from_url(redis_url, **redis_config)
     else:
         redis_connection = Redis(**redis_config)
-    context_manager = ContextManager(session_maker, redis_connection)
+    context_manager = ContextManager(session_maker, redis_connection, auto_commit=auto_commit, trace_changes=True)
     return context_manager
 
 def setup_application(config: Dict[str, Any]) -> ResourceManager:
