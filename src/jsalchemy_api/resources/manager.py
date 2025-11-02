@@ -117,7 +117,7 @@ class ResourceManager:
         """Log in the user and return the status object."""
         user = await self.auth_man.login(username, password)
         if not user:
-            raise HandledValidation({self.auth_man.unid: 'Invalid credentials'})
+            return None
         token, _ = await self.context.web_session_man.new()
         async with self.context(token) as ctx:
             session.user_id = user.id
