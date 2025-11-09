@@ -34,3 +34,8 @@ class HandledValidation(JSAlchemyException):
     def __init__(self, errors: dict):
         self.errors = errors
         self.status_code = 409
+
+class MissingFieldsException(JSAlchemyException):
+
+    def __init__(self, fields: str):
+        super().__init__(f'Missing field "{", ".join(fields)}"', 400)

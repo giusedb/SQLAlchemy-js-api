@@ -7,7 +7,7 @@ from operator import itemgetter
 from typing import List, Tuple, Set, Any, Dict
 
 from click import style
-from sqlalchemy import select, delete, or_, and_
+from sqlalchemy import select, delete, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
 
@@ -15,7 +15,14 @@ from ..utils import dict_merge
 from .base import WebResource, verb
 from jsalchemy_web_context import db, request
 
-from ..exceptions import RecordNotFound, ResourceNotFoundException, ValidationError, HandledValidation
+from ..exceptions import (
+    RecordNotFound,
+    ResourceNotFoundException,
+    ValidationError,
+    HandledValidation,
+    MissingFieldsException,
+    JSAlchemyException,
+)
 from ..utils import col2attr, async_memoize, camelize, memoize
 
 log = logging.getLogger('JSAlchemy')
@@ -78,9 +85,10 @@ class DBResource(WebResource):
     def __init__(self, resource_manager: 'ResourceManager', name: str,
                  model: DeclarativeBase, permissions: dict = None, columns: Tuple[str] = None,
                  extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None,
-                 client_field_options: dict = None, desc: str = ''):
+                 client_field_options: dict = None, desc: str = '', rpp: int = 702):
         super(DBResource, self).__init__()
         self._description = None
+        self.rpp = rpp
         self.name = name
         self.model = model
         self._permissions = permissions or {}
@@ -231,6 +239,7 @@ class DBResource(WebResource):
             ret['references'] = list(self.references)
             ret['format_string'] = self.format_string
             ret['verbs'] = self.verbs
+            ret['rpp'] = self.rpp
             self._description = ret
         return self._description
 
@@ -240,7 +249,7 @@ class DBResource(WebResource):
 
     async def by_pk(self, *pks):
         """Get the record object by its primary key."""
-        return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalar()
+        return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalars().all()
 
     def serialize(self, record) -> dict:
         """Clean and transform the `record` according with its type and available columns."""
@@ -261,22 +270,44 @@ class DBResource(WebResource):
         return record
 
     @verb(detached_instance=True)
-    async def get(self, filter: dict | None = None) -> list[DeclarativeBase]:
+    async def get(self, pks: List[str]) -> None:
         """Returns the list of `model`."""
-        query = select(self.model)
+        if (len(pks) > self.rpp):
+            raise JSAlchemyException('Too many records requested', 403)
+        data = await self.by_pk(*pks)
+        request.result.new.update(set(data))
+
+    def paginate(self, query, paging: dict = None):
+        if not paging:
+            paging = {}
+        rpp = paging.get('rpp', self.rpp)
+        page = int(paging.get('page', 1))
+        sort_by = paging.get('sort', ['id'])
+        missing_sort_fields = set(sort_by) - set(self.columns)
+        if missing_sort_fields:
+            raise MissingFieldsException(missing_sort_fields)
+
+        query = query.limit(rpp).offset((page - 1) * rpp).order_by(and_(*(
+            getattr(self.model, name[1:]).desc() if name.startswith('~') else getattr(self.model, name).asc()
+            for name in sort_by
+        )))
+        return query
+
+
+    @verb(detached_instance=True)
+    async def query(self, filter: dict, paging: dict = None):
+        """Search according the `filter` and returns the list of PKs"""
+        # validate the filter
+        if not all(key in self.columns for key in filter.keys()):
+            raise MissingFieldsException(set(filter.keys()) - set(self.columns))
+        query = select(self.pk)
         if filter:
-            if len(filter) == 1 and len(next(iter(filter.values()))) == 1:
-                key = next(iter(filter))
-                val = filter[key][0]
-                if val == None:
-                    query = query.where(getattr(self.model, key).is_(None))
-                else:
-                    query = query.where(getattr(self.model, key) == val)
-            else:
-                query = query.where(reduce(and_, (
-                    getattr(self.model, name).in_(val) for name, val in filter.items())))
+            query = query.where(reduce(and_, (
+                getattr(self.model, name).in_(val) for name, val in filter.items())))
+        total_count = (await db.execute(select(func.count()).select_from(query))).scalar()
+        query = self.paginate(query, paging)
         data = await db.execute(query)
-        request.result.new.update(set(data.scalars().all()))
+        return {'pks': data.scalars().all(), 'totalCount': total_count}
 
     @verb(detached_instance=True)
     async def post(self, **record: dict) -> None:
@@ -308,6 +339,7 @@ class DBResource(WebResource):
                 RecordNotFound(f'Records {pks} not found')
             raise RecordNotFound(f'Record {pks[0]} not found')
         await db.execute(delete(self.model).where(self.pk.in_(pks)))
+        # TODO Remove the following line as soon as the `ChangeInteceptor` can detect this change
         request.result.delete.update(((self.name, id) for id in ids))
 
     @verb(detached_instance=True)
