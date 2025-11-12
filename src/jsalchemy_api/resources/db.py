@@ -85,7 +85,7 @@ class DBResource(WebResource):
     def __init__(self, resource_manager: 'ResourceManager', name: str,
                  model: DeclarativeBase, permissions: dict = None, columns: Tuple[str] = None,
                  extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None,
-                 client_field_options: dict = None, desc: str = '', rpp: int = 702):
+                 client_field_options: dict = None, desc: str = '', rpp: int = 13):
         super(DBResource, self).__init__()
         self._description = None
         self.rpp = rpp
@@ -247,7 +247,7 @@ class DBResource(WebResource):
     async def describe(self) -> None:
         request.result.description.append(self.description)
 
-    async def by_pk(self, *pks):
+    async def by_pk(self, *pks) -> List[DeclarativeBase]:
         """Get the record object by its primary key."""
         return (await db.execute(select(self.model).where(self.pk.in_(pks)))).scalars().all()
 
@@ -281,15 +281,15 @@ class DBResource(WebResource):
         if not paging:
             paging = {}
         rpp = paging.get('rpp', self.rpp)
-        page = int(paging.get('page', 1))
-        sort_by = paging.get('sort', ['id'])
-        missing_sort_fields = set(sort_by) - set(self.columns)
+        page = int(paging.get('page') or 1)
+        sort_by = [(name[1:], True) if name.startswith('~') else (name, False) for name in paging.get('sort', ['id'])]
+        missing_sort_fields = {x[0] for x in sort_by} - set(self.columns)
         if missing_sort_fields:
             raise MissingFieldsException(missing_sort_fields)
 
         query = query.limit(rpp).offset((page - 1) * rpp).order_by(and_(*(
-            getattr(self.model, name[1:]).desc() if name.startswith('~') else getattr(self.model, name).asc()
-            for name in sort_by
+            getattr(self.model, name).desc() if asc else getattr(self.model, name).asc()
+            for name, asc in sort_by
         )))
         return query
 
@@ -326,6 +326,7 @@ class DBResource(WebResource):
         rec = await self.by_pk(pk)
         if not rec:
             raise RecordNotFound(f'Record {pk} not found')
+        rec = rec[0]
         for attr, value in record.items():
             # TODO limit the updates to the writable fields
             setattr(rec, attr, value)
