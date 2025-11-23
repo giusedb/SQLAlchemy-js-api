@@ -85,7 +85,7 @@ class DBResource(WebResource):
     def __init__(self, resource_manager: 'ResourceManager', name: str,
                  model: DeclarativeBase, permissions: dict = None, columns: Tuple[str] = None,
                  extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None,
-                 client_field_options: dict = None, desc: str = '', rpp: int = 13):
+                 client_field_options: dict = None, desc: str = '', rpp: int = 200):
         super(DBResource, self).__init__()
         self._description = None
         self.rpp = rpp
@@ -334,6 +334,8 @@ class DBResource(WebResource):
     @verb(detached_instance=True)
     async def delete(self, pks: List[str]) -> None:
         """Delete the record on the DB."""
+        if len(pks) > self.rpp:
+            raise JSAlchemyException('Too many records requested', 403)
         ids = tuple((await db.execute(select(self.pk).where(self.pk.in_(pks)))).scalars())
         if not ids:
             if len(pks) > 1:
