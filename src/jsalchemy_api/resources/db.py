@@ -287,10 +287,10 @@ class DBResource(WebResource):
         if missing_sort_fields:
             raise MissingFieldsException(missing_sort_fields)
 
-        query = query.limit(rpp).offset((page - 1) * rpp).order_by(and_(*(
+        query = query.limit(rpp).offset((page - 1) * rpp).order_by(*(
             getattr(self.model, name).desc() if asc else getattr(self.model, name).asc()
             for name, asc in sort_by
-        )))
+        ))
         return query
 
 
