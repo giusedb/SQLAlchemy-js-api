@@ -270,12 +270,13 @@ class DBResource(WebResource):
         return record
 
     @verb(detached_instance=True)
-    async def get(self, pks: List[str]) -> None:
+    async def get(self, pks: List[str]) -> dict:
         """Returns the list of `model`."""
         if (len(pks) > self.rpp):
             raise JSAlchemyException('Too many records requested', 403)
         data = await self.by_pk(*pks)
-        request.result.new.update(set(data))
+        # request.result.new.update(set(data))
+        return {'_': {'new': { self.name : [self.serialize(o) for o in data] } } }
 
     def paginate(self, query, paging: dict = None):
         if not paging:

@@ -65,7 +65,7 @@ class ResourceManager:
             return [self._deep_serialize(v) for v in item]
         elif isinstance(item, DeclarativeBase):
             titem = type(item)
-            resource = self.resources.get()
+            resource = self.resources.get(type(item))
             if not resource:
                 raise TypeError(f'type {type(item)} not serializable.')
             if item.id in request.result['data'].get(titem.__name__, {}):
@@ -79,6 +79,8 @@ class ResourceManager:
         req: ResultData = request.result
         ret = req.to_dict(self)
         if result:
+            if isinstance(result, dict) and tuple(result) == ('_',):
+                return dict_merge(ret, result['_'])
             ret['payload'] = self._deep_serialize(result)
         return ret
 
