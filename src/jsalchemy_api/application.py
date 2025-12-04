@@ -62,6 +62,9 @@ def setup_application(config: Dict[str, Any]) -> ResourceManager:
         auth_config = config['authorization']
         from jsalchemy_auth.auth import Auth
         auth = Auth(**auth_config)
+    realtime = config.get('web', {}).get('realtime')
+    resource_manager = ResourceManager(context=context_manager, auth_man=authentication_manager,
+                                       realtime_queue=realtime.get('redis_channel'))
 
-    resource_manager = ResourceManager(context=context_manager, auth_man=authentication_manager, )
+
     return resource_manager

@@ -6,6 +6,7 @@ from click import style
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
+from .propagation import Messanger
 from ..exceptions import HandledValidation
 
 from jsalchemy_web_context import ContextManager, session, request, db
@@ -30,13 +31,16 @@ class ResourceManager:
                  auth_man: AuthenticationManager,
                  context: ContextManager,
                  name: str | None = None,
-                 description: str = ''):
+                 description: str = '',
+                 realtime_queue: str = None):
         self.context = context
         self.auth_man = auth_man
         self.last_run = time.time()
         self.app_name = name or 'no-name'
         self.description = description
         self.interceptor = ChangeInterceptor(self)
+        self.messanger = Messanger(self, realtime_queue) if realtime_queue else None
+
 
     def __call__(self, token=None):
         return self.context(token)
@@ -105,6 +109,9 @@ class ResourceManager:
                 request.result = ResultData()
                 result = await action(*args, **kwargs)
                 await db.commit()
+                p = self.messanger.propagate()
+                if p:
+                    await p
                 return self.serialize_results(result)
             except HandledValidation as e:
                 return {
@@ -129,6 +136,7 @@ class ResourceManager:
                 'token': token,
                 'application': self.app_name,
                 'user_id': user.id,
+                'wsConnection': 'ws://localhost:7998/',
                 'user': { c.name: getattr(user, c.name) for c in user.__table__.columns if c.name != 'password'}
             }
 
