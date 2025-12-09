@@ -86,7 +86,7 @@ class WSServer:
                                 self.groups[group_id].append(ws)
 
                 except ConnectionClosedError:
-                    logger.info('Client disconnected abnormally')
+                    return logger.info('Client disconnected abnormally')
                 except ConnectionClosedOK:
                     return logger.info('Client %s disconnected', style(str(session['user_id']), fg='green'))
         finally:
