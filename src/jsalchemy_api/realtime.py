@@ -1,4 +1,5 @@
 import asyncio
+from asyncio import gather
 from collections import defaultdict
 
 from marshal import loads
@@ -126,8 +127,11 @@ class WSServer:
                 logger.error('Error receiving message', exc_info=True)
 
     def start(self):
-        async def run():
+        async def run_server():
             async with serve(self.message_handler, self.host, self.port) as server:
                 await server.serve_forever();
 
-        asyncio.run(asyncio.gather(run(), self.read_redis(), self.read_redis()))
+        async def both():
+            return await asyncio.gather(run_server(), self.read_redis())
+
+        asyncio.run(both())
