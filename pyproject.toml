@@ -1,33 +1,54 @@
-[tool.poetry]
+[project]
 name = "sqlalchemy-js-api"
 version = "0.1.1"
 description = ""
-authors = ["Giuseppe Di Bona <giusedb@gmail.com>"]
+authors = [{ name = "Giuseppe Di Bona", email = "giusedb@gmail.com" }]
+requires-python = ">=3.11,<4"
 readme = "README.md"
-packages = [{include = "jsalchemy_api", from = "src"}]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "redis>=6.2.1,<7",
+    "sqlalchemy>=2.0",
+    "click>=8.3.0,<9",
+]
 
-[tool.poetry.dependencies]
-python = "^3.11"
-redis = "^6.2.1"
-sqlalchemy = ">=2.0"
-click = "^8.3.0"
+[dependency-groups]
+devel = [
+    "pytest>=8.3.4,<9",
+    "ipython>=8.31.0,<9",
+]
+dev = [
+    "pytest-mock>=3.14.0,<4",
+    "ipython>=8.31.0,<9",
+    "pytest-mockredis>=0.1.6,<0.2",
+    "mockaioredis>=0.0.16,<0.0.17",
+    "aiosqlite>=0.20.0,<0.21",
+    "greenlet>=3.1.1,<4",
+    "pytest-asyncio>=1.2.0,<2",
+    "fakeredis>=2.32.0,<3",
+]
 
+[tool.uv]
+default-groups = [
+    "devel",
+    "dev",
+]
 
-[tool.poetry.group.devel.dependencies]
-pytest = "^8.3.4"
-ipython = "^8.31.0"
+[tool.hatch.build.targets.sdist]
+include = ["src/jsalchemy_api"]
 
+[tool.hatch.build.targets.wheel]
+include = ["src/jsalchemy_api"]
 
-[tool.poetry.group.dev.dependencies]
-pytest-mock = "^3.14.0"
-ipython = "^8.31.0"
-pytest-mockredis = "^0.1.6"
-mockaioredis = "^0.0.16"
-aiosqlite = "^0.20.0"
-greenlet = "^3.1.1"
-pytest-asyncio = "^1.2.0"
-fakeredis = "^2.32.0"
+[tool.hatch.build.targets.wheel.sources]
+"src/jsalchemy_api" = "jsalchemy_api"
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
