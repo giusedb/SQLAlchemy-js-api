@@ -1,23 +1,25 @@
 import time
+from copy import deepcopy
 from functools import reduce
-from typing import Iterable, Tuple
+from itertools import groupby
+from typing import Iterable, Tuple, Dict
 
 from click import style
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
+from jsalchemy_web_context.interceptors import ChangeInterceptor, ResultData
 from .propagation import Messanger
 from ..exceptions import HandledValidation
 
 from jsalchemy_web_context import ContextManager, session, request, db
 from jsalchemy_authentication.manager import AuthenticationManager
-from .base import WebResource, ResultData  # pylint disable=relative-beyond-top-level
+from .base import WebResource
 from .db import DBResource
 from ..exceptions import ResourceNotFoundException
 import logging
 
-from ..interceptors import ChangeInterceptor
-from ..utils import kebab_case, dict_merge
+from ..utils import kebab_case, dict_merge, dict_diff, model_group
 
 log = logging.getLogger('JSAlchemy')
 
@@ -32,15 +34,16 @@ class ResourceManager:
                  context: ContextManager,
                  name: str | None = None,
                  description: str = '',
-                 realtime_queue: str = None):
+                 realtime_queue: str = None,
+                 disable_interceptor: bool = False):
         self.context = context
+        if not context.change_interceptor:
+            self.interceptor = context.change_interceptor = ChangeInterceptor(self.on_message)
         self.auth_man = auth_man
         self.last_run = time.time()
         self.app_name = name or 'no-name'
         self.description = description
-        self.interceptor = ChangeInterceptor(self)
         self.messanger = Messanger(self, realtime_queue) if realtime_queue else None
-
 
     def __call__(self, token=None):
         return self.context(token)
@@ -72,16 +75,50 @@ class ResourceManager:
             resource = self.resources.get(type(item))
             if not resource:
                 raise TypeError(f'type {type(item)} not serializable.')
-            if item.id in request.result['data'].get(titem.__name__, {}):
+            if item in request.result.new.union(request.result.update):
                 return {'$ref': [titem.__name__, item.id]}
             return self.resources[type(item)].serialize(item)
         else:
             return item
 
-    def serialize_results(self, result: Iterable) -> dict:
+    @property
+    def changes(self) -> Dict[str, Iterable]:
+        """Generates the change dictionary from the intercepted `result`."""
+        result: ResultData = request.result
+        ret = {}
+        if result.update:
+            loaded = {model: {x['id']: x for x in items} for model, items in request.loaded.items() }
+            ret['update'] = {}
+            for model, records in groupby(sorted(result.update, key=lambda x: type(x).__name__), type):
+                resource = self.resources[model]
+                previous = loaded.get(model.__name__, {})
+                update_chunk = []
+                for record in records:
+                    prev = previous.get(record.id)
+                    if not prev:
+                        result.new.add(record)
+                        continue
+                    diff = dict_diff(prev, resource.serialize(record))
+                    if diff:
+                        diff['id'] = record.id
+                        update_chunk.append(diff)
+                ret['update'][resource.name] = update_chunk
+
+        if result.new:
+            ret['new'] = model_group(result.new, self)
+
+        if result.delete:
+            ret['delete'] = {self[k].name: list(v) for k, v in result.delete.items()}
+        if result.m2m:
+            ret['m2m'] = result.m2m
+        return ret
+
+
+    def serialize_results(self, change_dict: Dict[str, Iterable], result: Iterable) -> dict:
         """Compose the action's return dict"""
-        req: ResultData = request.result
-        ret = req.to_dict(self)
+        ret = deepcopy(change_dict)
+        if type(result) is dict and '__' in result:
+            ret.update(result.pop('__'))
         if result:
             if isinstance(result, dict) and tuple(result) == ('_',):
                 return dict_merge(ret, result['_'])
@@ -105,14 +142,16 @@ class ResourceManager:
 
         async with self.context(token) as ctx:
             try:
-                self.interceptor.start_record()
-                request.result = ResultData()
+                # collect the direct result
                 result = await action(*args, **kwargs)
-                await db.commit()
-                p = self.messanger.propagate()
-                if p:
-                    await p
-                return self.serialize_results(result)
+                await db.flush()
+                # get what has been changed over the verb's execution.
+                change_dict = self.changes
+                # execute the message propagation if any
+                propagation = self.messanger.propagate(change_dict)
+                propagation and await propagation
+                # combine the result with the data changes
+                return self.serialize_results(change_dict, result)
             except HandledValidation as e:
                 return {
                     '$validation': {
