@@ -52,7 +52,7 @@ def sync_session(sync_db_engine):
 @pytest.fixture()
 def context(session):
     """Build the jsalchemy_web_context context manager."""
-    return ContextManager(session, FakeRedis())
+    return ContextManager(session, FakeRedis(), auto_commit=True)
 
 # @pytest.fixture
 # def context(context_manager):

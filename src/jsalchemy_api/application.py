@@ -13,7 +13,7 @@ def print_SQL(query):
 Select.__str__ = Select.__repr__ = print_SQL
 
 
-def base_environment(config: Dict[str, Any], sync: bool = False, auto_commit=False):
+def base_environment(config: Dict[str, Any], sync: bool = False, init_db=False):
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     if sync:
         from redis import Redis
@@ -37,14 +37,14 @@ def base_environment(config: Dict[str, Any], sync: bool = False, auto_commit=Fal
         redis_connection = Redis.from_url(redis_url, **redis_config)
     else:
         redis_connection = Redis(**redis_config)
-    context_manager = ContextManager(session_maker, redis_connection, auto_commit=auto_commit, trace_changes=True)
+    context_manager = ContextManager(session_maker, redis_connection, auto_commit=not init_db)
     return context_manager
 
-def setup_application(config: Dict[str, Any]) -> ResourceManager:
+def setup_application(config: Dict[str, Any], init_db=False) -> ResourceManager:
     """Set up the application and returns the resource manager."""
     from jsalchemy_authentication.manager import AuthenticationManager
 
-    context_manager = base_environment(config)
+    context_manager = base_environment(config, init_db=init_db)
 
     authentication_config = config['authentication']
     identity_model = None
@@ -64,7 +64,7 @@ def setup_application(config: Dict[str, Any]) -> ResourceManager:
         auth = Auth(**auth_config)
     realtime = config.get('web', {}).get('realtime')
     resource_manager = ResourceManager(context=context_manager, auth_man=authentication_manager,
-                                       realtime_queue=realtime.get('redis_channel'))
+                                       realtime_queue=realtime.get('redis_channel'), disable_interceptor=init_db)
 
 
     return resource_manager
