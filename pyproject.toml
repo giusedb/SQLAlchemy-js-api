@@ -16,14 +16,16 @@ dependencies = [
     "redis>=6.2.1,<7",
     "sqlalchemy>=2.0",
     "click>=8.3.0,<9",
+    "sqlalchemy-js-authentication>=0.1.0,<0.2",
+    "sqlalchemy-js-api>=0.1.0,<0.2",
+    "sqlalchemy-js-authorization>=0.1.0,<0.2",
+    "orjson>=3.11.7",
 ]
 
 [dependency-groups]
-devel = [
+dev = [
     "pytest>=8.3.4,<9",
     "ipython>=8.31.0,<9",
-]
-dev = [
     "pytest-mock>=3.14.0,<4",
     "ipython>=8.31.0,<9",
     "pytest-mockredis>=0.1.6,<0.2",
@@ -32,11 +34,11 @@ dev = [
     "greenlet>=3.1.1,<4",
     "pytest-asyncio>=1.2.0,<2",
     "fakeredis>=2.32.0,<3",
+    "pylint>=4.0.4",
 ]
 
 [tool.uv]
 default-groups = [
-    "devel",
     "dev",
 ]
 
@@ -52,3 +54,8 @@ include = ["src/jsalchemy_api"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+sqlalchemy-js-authentication = { path = "../jsa-authentication", editable = true }
+sqlalchemy-js-authorization = { path = "../jsa-authorization", editable = true }
+sqlalchemy-js-web-context = { path = "../jsa-context", editable = true }
