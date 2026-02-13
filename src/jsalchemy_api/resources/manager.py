@@ -87,7 +87,10 @@ class ResourceManager:
         result: ResultData = request.result
         ret = {}
         if result.update:
-            loaded = {model: {x['id']: x for x in items} for model, items in request.loaded.items() }
+            loaded = { self.resources[model].name:
+                          {x['id']: x for x in items}
+                      for model, items in result.loaded.items()
+                      if model in self.resources }
             ret['update'] = {}
             for model, records in groupby(sorted(result.update, key=lambda x: type(x).__name__), type):
                 resource = self.resources[model]

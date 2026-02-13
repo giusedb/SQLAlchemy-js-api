@@ -1,4 +1,3 @@
-from abc import ABCMeta
 from functools import wraps
 from itertools import groupby
 from operator import itemgetter
@@ -23,11 +22,9 @@ def verb(name: str | FunctionType = None,
             return await func(self, instance, *args, **kwargs)
 
         if not detached_instance:
-            get_instance.is_verb = True
-            get_instance.serialize_results = return_mode == 'supervised'
             get_instance.orig_func = func
-            return get_instance
-
+            func = get_instance
+        func.detached_instance = detached_instance
         func.is_verb = True
         func.orig_func = func
         func.serialize_results = return_mode == 'supervised'

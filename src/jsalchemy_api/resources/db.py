@@ -7,6 +7,7 @@ from operator import itemgetter
 from typing import List, Tuple, Set, Any, Dict
 
 from click import style
+from pylint.checkers.utils import is_iterable
 from sqlalchemy import select, delete, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
@@ -103,6 +104,7 @@ class DBResource(WebResource):
         self.extras = extras or {}
         self.format_string = format_string
         self.read_only_columns = read_only_columns or ()
+        self.writable_columns = set(self.columns).difference(self.read_only_columns)
         self.client_field_options = client_field_options or {}
         self.desc = desc
         self.type_deserializers = {
@@ -198,7 +200,7 @@ class DBResource(WebResource):
 
     @property
     def verbs(self) -> List[Dict[str, Any]]:
-        default_verbs = 'get', 'put', 'post', 'delete', 'm2m', 'describe', 'permissions'
+        default_verbs = 'get', 'put', 'post', 'delete', 'm2m', 'describe', 'permissions', 'query'
         def serialize(name, verb) -> Dict[str, Any]:
             args = inspect.getfullargspec(verb.orig_func)
             defaults = dict_merge(
@@ -206,10 +208,10 @@ class DBResource(WebResource):
                 args.kwonlydefaults or {})
             return {
                 'name': name,
-                'is_instance': True,
-                'args': args.args[2:],
+                'isInstance': not verb.detached_instance,
+                'args': args.args[1 if verb.detached_instance else 2:],
                 'defaults': defaults,
-                'detatchReturn': verb.serialize_results
+                'detachReturn': verb.serialize_results
             }
         return [serialize(name, verb) for name, verb in self.__class__.__dict__.items()
                 if hasattr(verb, 'is_verb') and name not in default_verbs]
@@ -245,7 +247,7 @@ class DBResource(WebResource):
 
     @verb(detached_instance=True)
     async def describe(self) -> None:
-        request.result.description.append(self.description)
+        return {'__': {'description': [self.description]}}
 
     async def by_pk(self, *pks) -> List[DeclarativeBase]:
         """Get the record object by its primary key."""
@@ -254,7 +256,7 @@ class DBResource(WebResource):
     def serialize(self, record) -> dict:
         """Clean and transform the `record` according with its type and available columns."""
         return {
-            col: self.type_serializers[col](getattr(record, col))
+            str(col): self.type_serializers[col](getattr(record, col))
             if col in self.type_serializers else getattr(record, col)
             for col in self.columns
         }
@@ -276,7 +278,7 @@ class DBResource(WebResource):
             raise JSAlchemyException('Too many records requested', 403)
         data = await self.by_pk(*pks)
         # request.result.new.update(set(data))
-        return {'_': {'new': { self.name : [self.serialize(o) for o in data] } } }
+        return {'__': {'new': { self.name : [self.serialize(o) for o in data] } } }
 
     def paginate(self, query, paging: dict = None):
         if not paging:
@@ -304,7 +306,8 @@ class DBResource(WebResource):
         query = select(self.pk)
         if filter:
             query = query.where(reduce(and_, (
-                getattr(self.model, name).in_(val) for name, val in filter.items())))
+                getattr(self.model, name).in_(val) if is_iterable(val) else getattr(self.model, name) == val
+                for (name, val) in filter.items())))
         total_count = (await db.execute(select(func.count()).select_from(query))).scalar()
         query = self.paginate(query, paging)
         data = await db.execute(query)
@@ -320,7 +323,7 @@ class DBResource(WebResource):
     @verb(detached_instance=True)
     async def put(self, **record: dict) -> None:
         """Update the record on the DB."""
-        pk = record.pop(self.model.__mapper__.primary_key[0].key)
+        pk = record.pop(self.pk.key)
         errors = self.validate(record)
         if errors:
             raise HandledValidation(errors)
@@ -329,7 +332,6 @@ class DBResource(WebResource):
             raise RecordNotFound(f'Record {pk} not found')
         rec = rec[0]
         for attr, value in record.items():
-            # TODO limit the updates to the writable fields
             setattr(rec, attr, value)
 
     @verb(detached_instance=True)
@@ -344,7 +346,7 @@ class DBResource(WebResource):
             raise RecordNotFound(f'Record {pks[0]} not found')
         await db.execute(delete(self.model).where(self.pk.in_(pks)))
         # TODO Remove the following line as soon as the `ChangeInteceptor` can detect this change
-        request.result.delete.update(((self.name, id) for id in ids))
+        # request.result.delete.update(((self.model, id) for id in ids))
 
     @verb(detached_instance=True)
     async def m2m(self, attribute: str, method: str, keys):
@@ -367,6 +369,8 @@ class DBResource(WebResource):
     def validate(self, record: dict):
         ret = {}
         for attr, value in tuple(record.items()):
+            if attr not in self.writable_columns:
+                continue
             validator = getattr(self, f"validate_{attr}", None)
             if validator:
                 try:
