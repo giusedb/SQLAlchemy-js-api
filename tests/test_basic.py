@@ -1,7 +1,7 @@
 from datetime import date
 
 import pytest
-from sqlalchemy import String
+from sqlalchemy import String, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, relationship
 from sqlalchemy.testing.schema import mapped_column
 
@@ -24,18 +24,16 @@ async def test_login(context, auth, base_users):
         assert session.user_id == user_id
 
 
-@pytest.mark.asyncio
-async def test_describe(Base, auth, context, all_types):
+# @pytest.mark.asyncio
+def test_describe(Base, auth, context, all_types):
     rm = ResourceManager(auth, context)
 
     resource = DBResource(rm, 'AllTypes', all_types, desc='all types are in this table',
                           format_string='${this.string}')
 
-    description = await resource.describe()
-    assert description
-    assert 'description' in description
-    assert 'AllTypes' in description['description']
-    desc = description['description']['AllTypes']
+    desc = resource.description
+    assert desc
+    assert len({'name', 'description', 'fields', '$pk', 'references', 'format_string', 'verbs', 'rpp'}.difference(desc.keys())) == 0
     assert desc['description'] == 'all types are in this table'
     assert desc['$pk'] == ['id']
     assert desc['references'] == []
@@ -65,18 +63,22 @@ async def test_describe(Base, auth, context, all_types):
 
     assert fields['clob']['description'] == 'this contains a long text'
 
-@pytest.mark.asyncio
-async def test_refences(Base, auth, context, all_types):
+def test_references(Base, auth, context, all_types):
 
     class User(Base):
         __tablename__ = 'user'
         id: Mapped[int] = mapped_column(primary_key=True)
         name: Mapped[str] = mapped_column(String(150), nullable=False)
-        types: Mapped[list[all_types]] = relationship('AllTypes', secondary='types')
+        type_id: Mapped[int] = mapped_column(ForeignKey('all_types.id'))
+        type: Mapped[all_types] = relationship(all_types, backref='user')
 
     rm = ResourceManager(auth, context)
 
-    resource = DBResource(rm, 'AllTypes', all_types, desc='all types are in this table',
-                          format_string='${this.string}')
+    resource = DBResource(rm, 'AllTypes', all_types)
 
-    assert await resource.references == []
+    assert list(resource.references) == []
+
+    user_resource = DBResource(rm, 'User', User)
+    first_reference = next(resource.references)
+    assert first_reference['resource'] == 'User'
+    assert first_reference['type'] == 'many'
