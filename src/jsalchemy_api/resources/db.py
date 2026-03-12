@@ -200,7 +200,7 @@ class DBResource(WebResource):
 
     @property
     def verbs(self) -> List[Dict[str, Any]]:
-        default_verbs = 'get', 'put', 'post', 'delete', 'm2m', 'describe', 'permissions', 'query'
+        default_verbs = 'get', 'put', 'post', 'delete', 'm2m', 'describe', 'permissions', 'query', 'bulk'
         def serialize(name, verb) -> Dict[str, Any]:
             args = inspect.getfullargspec(verb.orig_func)
             defaults = dict_merge(
@@ -333,6 +333,29 @@ class DBResource(WebResource):
         rec = rec[0]
         for attr, value in record.items():
             setattr(rec, attr, value)
+
+
+    @verb(detached_instance=True)
+    async def bulk(self, records: List[DeclarativeBase]):
+        """Bulk update and create massive record"""
+        pk = self.pk.key
+        with_pk = []
+        no_pk = []
+        for record in records:
+            if pk in record:
+                with_pk.append(record)
+            else:
+                no_pk.append(record)
+        if no_pk:
+            db.add_all([self.model(**self.deserialize_record(rec)) for rec in no_pk])
+        if with_pk:
+            pks = set(map(itemgetter(pk), with_pk))
+            existing_items = {getattr(item, pk): item for item in (await db.execute(
+                select(self.model).where(self.pk.in_(tuple(pks))))).scalars().all()}
+            for rec in with_pk:
+                item = existing_items[rec[pk]]
+                for k, v in rec.items():
+                    setattr(item, k, v)
 
     @verb(detached_instance=True)
     async def delete(self, pks: List[str]) -> None:
