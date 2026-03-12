@@ -5,6 +5,7 @@ from datetime import date, datetime
 from functools import reduce
 from operator import itemgetter
 from typing import List, Tuple, Set, Any, Dict
+from types import MethodType
 
 from click import style
 from pylint.checkers.utils import is_iterable
@@ -54,13 +55,13 @@ JS_TYPES = {
 }
 
 JS_TYPE_SERIALIZERS = {
-    'Date': lambda d: d and d.timestamp(),
+    'Date': lambda d: d and datetime.fromordinal(d.toordinal()).timestamp(),
     'DateTime': lambda d: d and d.timestamp(),
 }
 
 JS_TYPE_DESERIALIZERS = {
-    'Date': lambda d: d and date.fromtimestamp(d),
-    'DateTime': lambda d: d and datetime.fromtimestamp(d),
+    'Date': lambda d: d and date.fromtimestamp(d / 1000),
+    'DateTime': lambda d: d and datetime.fromtimestamp(d / 1000),
 }
 
 def to_js_type(field_type) -> str:
@@ -131,7 +132,7 @@ class DBResource(WebResource):
 
         return [
             serialize(name, field)
-            for name, field in self._relationships()
+            for name, field in self.model._relationships()
             if field.prop.argument in self.resource_manager
         ]
 
@@ -188,6 +189,7 @@ class DBResource(WebResource):
                 foreign_attribute=col2attr(resolve(prop).model)[_get_remote(self.model, prop).name],  # TODO multifields
                 description=prop.doc,
                 local_attribute=col2attr(self.model)[next(iter(prop.local_columns)).name],
+                is_pk=_get_remote(self.model, prop).primary_key
             )
 
         for prop in self.model.__mapper__.relationships:
@@ -213,10 +215,12 @@ class DBResource(WebResource):
                 'defaults': defaults,
                 'detachReturn': verb.serialize_results
             }
-        return [serialize(name, verb) for name, verb in self.__class__.__dict__.items()
-                if hasattr(verb, 'is_verb') and name not in default_verbs]
+        attrs = tuple(reduce(dict_merge, (cls.__dict__ for cls in self.__class__.__mro__), {}).items())
+        meths = tuple(((name, meth) for name, meth in attrs if hasattr(meth, '__call__')))
+        return [serialize(name, verb) for name, verb in meths if hasattr(verb, 'is_verb') and name not in default_verbs]
 
     @property
+    @memoize
     def description(self):
         if not self._description:
             columns = (c for c in self.model.__mapper__.columns if c.name in self.columns)
@@ -278,19 +282,18 @@ class DBResource(WebResource):
             raise JSAlchemyException('Too many records requested', 403)
         data = await self.by_pk(*pks)
         # request.result.new.update(set(data))
-        return {'__': {'new': { self.name : [self.serialize(o) for o in data] } } }
+        return {'__': {'read': { self.name : [self.serialize(o) for o in data] } } }
 
     def paginate(self, query, paging: dict = None):
         if not paging:
             paging = {}
-        rpp = paging.get('rpp', self.rpp)
-        page = int(paging.get('page') or 1)
+        page = int(paging.get('page') or 0)
         sort_by = [(name[1:], True) if name.startswith('~') else (name, False) for name in paging.get('sort', ['id'])]
         missing_sort_fields = {x[0] for x in sort_by} - set(self.columns)
         if missing_sort_fields:
             raise MissingFieldsException(missing_sort_fields)
 
-        query = query.limit(rpp).offset((page - 1) * rpp).order_by(*(
+        query = query.limit(self.rpp).offset((page) * self.rpp).order_by(*(
             getattr(self.model, name).desc() if asc else getattr(self.model, name).asc()
             for name, asc in sort_by
         ))
