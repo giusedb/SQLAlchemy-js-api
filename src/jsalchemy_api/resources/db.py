@@ -296,9 +296,7 @@ class DBResource(WebResource):
         ))
         return query
 
-
-    @verb(detached_instance=True)
-    async def query(self, filter: dict, paging: dict = None):
+    async def _query(self, filter: dict, paging: dict = None):
         """Search according the `filter` and returns the list of PKs"""
         # validate the filter
         if not all(key in self.columns for key in filter.keys()):
@@ -306,12 +304,20 @@ class DBResource(WebResource):
         query = select(self.pk)
         if filter:
             query = query.where(reduce(and_, (
-                getattr(self.model, name).in_(val) if is_iterable(val) else getattr(self.model, name) == val
-                for (name, val) in filter.items())))
+                getattr(self.model, name).in_(val) if
+                    isinstance(val, (list, tuple, set)) else
+                    getattr(self.model, name) == val
+                for name, val in filter.items())))
         total_count = (await db.execute(select(func.count()).select_from(query))).scalar()
         query = self.paginate(query, paging)
         data = await db.execute(query)
         return {'pks': data.scalars().all(), 'totalCount': total_count}
+
+    @verb(detached_instance=True)
+    async def query(self, filter: dict = None, paging: dict = None, multiple: List = None):
+        if multiple:
+            return [await self._query(**args) for args in multiple]
+        return await self._query(filter, paging)
 
     @verb(detached_instance=True)
     async def post(self, **record: dict) -> None:
