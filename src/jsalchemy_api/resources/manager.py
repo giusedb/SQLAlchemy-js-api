@@ -45,6 +45,9 @@ class ResourceManager:
         self.description = description
         self.messanger = Messanger(self, realtime_queue) if realtime_queue else None
 
+    def on_message(self, message):
+        print(message)
+
     def __call__(self, token=None):
         return self.context(token)
 
