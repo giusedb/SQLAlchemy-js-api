@@ -345,7 +345,7 @@ class DBResource(WebResource):
 
 
     @verb(detached_instance=True)
-    async def bulk(self, records: List[DeclarativeBase]):
+    async def bulk(self, records: List[Dict]):
         """Bulk update and create massive record"""
         pk = self.pk.key
         with_pk = []
