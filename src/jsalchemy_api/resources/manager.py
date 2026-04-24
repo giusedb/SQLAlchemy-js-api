@@ -104,10 +104,11 @@ class ResourceManager:
                     if not prev:
                         result.new.add(record)
                         continue
-                    diff = dict_diff(prev, resource.serialize(record))
+                    serialized = resource.serialize(record)
+                    diff = dict_diff(serialized, prev)
                     if diff:
                         diff['id'] = record.id
-                        update_chunk.append(diff)
+                        update_chunk.append([serialized, diff])
                 ret['update'][resource.name] = update_chunk
 
         if result.new:
