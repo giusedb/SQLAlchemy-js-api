@@ -8,7 +8,7 @@ from click import style
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
-from jsalchemy_web_context.interceptors import ChangeInterceptor, ResultData
+from jsalchemy_web_context.interceptors import ChangeInterceptor, DBChange
 from .propagation import Messanger
 from ..exceptions import HandledValidation
 
@@ -87,7 +87,7 @@ class ResourceManager:
     @property
     def changes(self) -> Dict[str, Iterable]:
         """Generates the change dictionary from the intercepted `result`."""
-        result: ResultData = request.result
+        result: DBChange = request.result
         ret = {}
         if result.update:
             loaded = { self.resources[model].name:
