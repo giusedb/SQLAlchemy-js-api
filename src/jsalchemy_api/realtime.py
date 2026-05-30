@@ -14,6 +14,8 @@ from websockets.asyncio.server import serve, ServerConnection
 from logging import getLogger
 logger = getLogger('web.realtime')
 
+RECONNECT_DELAY = 5  # seconds between redis reconnection attempts
+
 class WSServer:
     """WebSocket powered server."""
     redis_channel: str
@@ -66,18 +68,21 @@ class WSServer:
                         session_value = await self.redis.get(f'session:{args[0]}')
                         if not session_value:
                             logger.info('Client Session %s not found', style(str(args[0]), fg='red'))
-                            return self.connection_close(session, 403, 'Unauthorized')
+                            self.connection_close(session, 403, 'Unauthorized')
+                            return None
                         try:
                             session = ploads(session_value)
                         except ValueError:
                             logger.warning(f'Session corrupted {args[0]}.')
-                            return self.connection_close(session, 403, 'Connection corrupted')
+                            self.connection_close(session, 403, 'Connection corrupted')
                         if 'user_id' not in session:
                             logger.warning('Client %s connected but user not found on %s',
                                         style(str(args[0]), fg='yellow'),
                                         style(str(session), fg='green'))
-                            return self.connection_close(session, 403, 'Unauthorized')
-                        logger.info('User %s connected', style(str(session['user_id']), fg='green'))
+                            self.connection_close(session, 403, 'Unauthorized')
+                            return None
+                        logger.info('User %s connected (%d users connected)',
+                                    style(str(session['user_id']), fg='green'), len(self.users))
                         user_id = session.get('user_id')
                         if user_id:
                             self.users[user_id] = ws
@@ -87,9 +92,10 @@ class WSServer:
                                 self.groups[group_id].append(ws)
 
                 except ConnectionClosedError:
-                    return logger.info('Client disconnected abnormally')
+                    logger.info('Client disconnected abnormally (%d users connected)',len(self.users))
                 except ConnectionClosedOK:
-                    return logger.info('Client %s disconnected', style(str(session['user_id']), fg='green'))
+                    logger.info('Client %s disconnected (%d users connected)',
+                                style(str(session['user_id']), fg='green'), len(self.users))
         finally:
             if session:
                 if 'user_id' in session:
@@ -104,7 +110,7 @@ class WSServer:
             logger.debug('Sending message to all clients')
             users = self.users.keys()
         logger.debug('Sending message to %s users and %s groups',
-                     style(str(users), fg='green'), style(str(groups), fg='green'))
+                     style(', '.join(map(str, users)), fg='green'), style(str(groups), fg='green'))
         for user in users or ():
             ws: ServerConnection = self.users.get(user)
             if ws:
@@ -115,16 +121,33 @@ class WSServer:
                 await ws.send(message)
 
     async def read_redis(self):
-        """Reads messages from Redis and sends them to the clients."""
+        """Subscribes to Redis pub/sub and broadcasts messages to all connected clients.
+
+        Each WSServer instance gets its own copy of every message, so horizontal
+        scaling works correctly — every client receives every notification.
+        Automatically re-subscribes on connection loss.
+        """
         while True:
-            channel, message = await self.redis.brpop(self.redis_channel)
             try:
-                if message:
-                    logger.debug('Received message from %s %s',
-                                 style(channel, fg='yellow'), style(message, fg='green'))
-                    await self.to_clients(*loads(message))
-            except Exception as e:
-                logger.error('Error receiving message', exc_info=True)
+                pubsub = self.redis.pubsub()
+                await pubsub.subscribe(self.redis_channel)
+                logger.info('Subscribed to Redis channel %s',
+                            style(self.redis_channel, fg='green'))
+                async for message in pubsub.listen():
+                    if message['type'] == 'message':
+                        data = message['data']
+                        if data:
+                            logger.debug('Received pub/sub message from %s',
+                                         style(self.redis_channel, fg='yellow'))
+                            await self.to_clients(*loads(data))
+            except (ConnectionError, OSError, asyncio.TimeoutError) as e:
+                logger.error('Redis connection lost (pub/sub): %s. Reconnecting in %ds...',
+                             e, RECONNECT_DELAY)
+                await asyncio.sleep(RECONNECT_DELAY)
+            except Exception:
+                logger.exception('Unexpected error in pub/sub loop. Reconnecting in %ds...',
+                                 RECONNECT_DELAY)
+                await asyncio.sleep(RECONNECT_DELAY)
 
     def start(self):
         async def run_server():

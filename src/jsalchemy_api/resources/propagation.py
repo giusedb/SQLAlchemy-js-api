@@ -16,9 +16,9 @@ class Messanger:
         self.res_man = resource_manager
 
     async def rt_send(self, message: str, users: list[str] = None, groups: list[str] = None):
-        """Send a message to a list of users and groups"""
+        """Publish a message via Redis pub/sub so all subscribers receive it."""
         encapsulated = dumps((users, groups, message))
-        await self.redis.lpush(self.q_name, encapsulated)
+        await self.redis.publish(self.q_name, encapsulated)
 
     def propagate(self, message: dict = None) -> None:
         """Propagate any message available on `request.results`."""
