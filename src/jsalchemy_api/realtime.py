@@ -56,8 +56,9 @@ class WSServer:
     async def message_handler(self, ws: ServerConnection) -> None:
         """Handle any message coming form the client."""
         session = None
+        session_active = True
         try:
-            while True:
+            while session_active:
                 try:
                     message = await ws.recv()
                     if ':' not in message:
@@ -82,7 +83,7 @@ class WSServer:
                             self.connection_close(session, 403, 'Unauthorized')
                             return None
                         logger.info('User %s connected (%d users connected)',
-                                    style(str(session['user_id']), fg='green'), len(self.users))
+                                    style(str(session['user_id']), fg='green'), len(self.users) + 1)
                         user_id = session.get('user_id')
                         if user_id:
                             self.users[user_id] = ws
@@ -93,9 +94,13 @@ class WSServer:
 
                 except ConnectionClosedError:
                     logger.info('Client disconnected abnormally (%d users connected)',len(self.users))
+                    self.connection_close(session, 1006, 'Connection closed abnormally')
+                    session_active = False
                 except ConnectionClosedOK:
                     logger.info('Client %s disconnected (%d users connected)',
-                                style(str(session['user_id']), fg='green'), len(self.users))
+                                style(str(session['user_id']), fg='green'), len(self.users) - 1)
+                    self.connection_close(session, 1000, 'Connection closed normally')
+                    session_active = False
         finally:
             if session:
                 if 'user_id' in session:
