@@ -155,8 +155,9 @@ class ResourceManager:
                 # get what has been changed over the verb's execution.
                 change_dict = self.changes
                 # execute the message propagation if any
-                propagation = self.messanger.propagate(change_dict)
-                propagation and await propagation
+                if self.messanger:
+                    propagation = self.messanger.propagate(change_dict)
+                    propagation and await propagation
                 # combine the result with the data changes
                 return self.serialize_results(change_dict, result)
             except HandledValidation as e:
