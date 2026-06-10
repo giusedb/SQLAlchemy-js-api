@@ -60,8 +60,17 @@ def setup_application(config: Dict[str, Any], init_db=False) -> ResourceManager:
                                                    salt=authentication_config['salt'], identified_by=identified_by)
     if 'authorization' in config:
         auth_config = config['authorization']
+        if 'base_class' in auth_config:
+            auth_class_name = auth_config['base_class']
+            try:
+                auth_config['base_class'] = load_class(auth_class_name)
+            except (ImportError, AttributeError) as e:
+                raise ImportError(
+                    f"Could not load authorization class '{auth_class_name}': {e}"
+                ) from e
         from jsalchemy_auth.auth import Auth
-        auth = Auth(**auth_config)
+        auth = Auth(user_model=authentication_manager.user_model,
+                    **auth_config)
     realtime = config.get('web', {}).get('realtime')
     resource_manager = ResourceManager(context=context_manager, auth_man=authentication_manager,
                                        realtime_queue=realtime.get('redis_channel'), disable_interceptor=init_db)
