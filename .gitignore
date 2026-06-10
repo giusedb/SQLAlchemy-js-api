@@ -2,3 +2,4 @@
 poetry.lock
 uv.lock
 .aider*
+wiki
