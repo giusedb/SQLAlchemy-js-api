@@ -39,3 +39,10 @@ class MissingFieldsException(JSAlchemyException):
 
     def __init__(self, fields: str):
         super().__init__(f'Missing field "{", ".join(fields)}"', 400)
+
+
+class UnknownFieldsException(JSAlchemyException):
+
+    def __init__(self, fields: str):
+        super().__init__(f'Unknown field "{", ".join(fields)}"', 400)
+

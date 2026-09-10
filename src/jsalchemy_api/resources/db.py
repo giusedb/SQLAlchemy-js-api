@@ -23,7 +23,7 @@ from ..exceptions import (
     ValidationError,
     HandledValidation,
     MissingFieldsException,
-    JSAlchemyException,
+    JSAlchemyException, UnknownFieldsException,
 )
 from ..utils import col2attr, async_memoize, camelize, memoize
 
@@ -303,7 +303,7 @@ class DBResource(WebResource):
         """Search according the `filter` and returns the list of PKs"""
         # validate the filter
         if not all(key in self.columns for key in filter.keys()):
-            raise MissingFieldsException(set(filter.keys()) - set(self.columns))
+            raise UnknownFieldsException(set(filter.keys()) - set(self.columns))
         query = select(self.pk)
         if filter:
             query = query.where(reduce(and_, (

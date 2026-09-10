@@ -3,6 +3,7 @@ from itertools import groupby
 from operator import itemgetter
 from types import FunctionType
 
+from jsalchemy_api.exceptions import RecordNotFound
 from jsalchemy_api.utils import model_group, dict_diff
 from jsalchemy_web_context import request
 
@@ -18,7 +19,9 @@ def verb(name: str | FunctionType = None,
     def decorator(func):
         @wraps(name)
         async def get_instance(self, pk, *args, **kwargs):
-            instance = await self.by_pk(pk)
+            instance = await self.one_by_pk(pk)
+            if not instance:
+                raise RecordNotFound("Reosurce {self.name} with PK ({pk}) not found on this server")
             return await func(self, instance, *args, **kwargs)
 
         if not detached_instance:
