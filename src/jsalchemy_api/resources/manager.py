@@ -51,7 +51,7 @@ class ResourceManager:
     def __call__(self, token=None):
         return self.context(token)
 
-    def register(self, resource: WebResource):
+    def register(self, resource: WebResource, name: str=None):
         """Register a web resource for getting exposed to the web endpoints."""
         log.debug('registering resource "%s"', resource.name)
         self.resources[kebab_case(resource.name)] = resource
@@ -144,7 +144,7 @@ class ResourceManager:
         if not res:
             raise ResourceNotFoundException(f'Resource "{resource}" not found')
         action = getattr(res, verb, None)
-        if not action:
+        if not action or not getattr(action, 'is_verb', False):
             raise ResourceNotFoundException(f'Verb {resource}.{verb} not found')
 
         async with self.context(token) as ctx:
