@@ -4,7 +4,8 @@ import logging
 from datetime import date, datetime
 from functools import reduce
 from operator import itemgetter
-from typing import List, Tuple, Set, Any, Dict
+from sqlalchemy.orm.properties import ColumnProperty
+from typing import List, Tuple, Set, Any, Dict, Coroutine
 from types import MethodType
 
 from click import style
@@ -13,7 +14,7 @@ from sqlalchemy import select, delete, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
 
-from ..utils import dict_merge
+from ..utils import dict_merge, kebab_case
 from .base import WebResource, verb
 from jsalchemy_web_context import db, request
 
@@ -87,7 +88,7 @@ class DBResource(WebResource):
     def __init__(self, resource_manager: 'ResourceManager', name: str,
                  model: DeclarativeBase, permissions: dict = None, columns: Tuple[str] = None,
                  extras: dict = None, format_string: str = None, read_only_columns: Tuple[str] = None,
-                 client_field_options: dict = None, desc: str = '', rpp: int = 200):
+                 client_field_options: dict = None, desc: str = '', rpp: int = 200, column_names: Dict[str, str] = None):
         super(DBResource, self).__init__()
         self._description = None
         self.rpp = rpp
@@ -95,7 +96,10 @@ class DBResource(WebResource):
         self.model = model
         self._permissions = permissions or {}
         self.resource_manager = resource_manager
-        self.columns = columns or tuple(col.name for col in self.model.__table__.columns)
+        column_names = column_names or {}
+        self.columns = { column_names.get(col.key, col.key): getattr(self.model, col.key)
+                         for col in self.model.__mapper__.attrs if isinstance(col, ColumnProperty)}
+        # self.columns = columns or tuple(col.name for col in self.model.__table__.columns)
         def serialize(obj):
             return {col: getattr(obj, col) for col in self.columns}
         model.__serialize__ = serialize
@@ -118,6 +122,8 @@ class DBResource(WebResource):
             if c.name in self.columns and to_js_type(c.type) in JS_TYPE_SERIALIZERS }
         log.debug('Created resource "%s"', self.name)
         self.resource_manager.register(self)
+        for m2m in self.m2ms.values():
+            m2m.resource_manager.register(m2m)
 
     @property
     def one_to_many(self) -> List[dict]:
@@ -240,7 +246,7 @@ class DBResource(WebResource):
             ret['name'] = self.name
             ret['description'] = self.desc or self.model.__doc__
             # ret['permissions'] = self._permissions or []
-            ret['fields'] = [serialize(col.key, col) for col in columns]
+            ret['fields'] = [serialize(col.key, col) for col in self.columns.values()]
             ret['$pk'] = [f.name for f in self.model.__table__.primary_key]
             ret['references'] = list(self.references)
             ret['format_string'] = self.format_string
@@ -299,7 +305,7 @@ class DBResource(WebResource):
         ))
         return query
 
-    async def _query(self, filter: dict, paging: dict = None):
+    async def _query(self, filter: Dict[str, List[str]], paging: dict = None):
         """Search according the `filter` and returns the list of PKs"""
         # validate the filter
         if not all(key in self.columns for key in filter.keys()):
@@ -312,6 +318,8 @@ class DBResource(WebResource):
                     getattr(self.model, name) == val
                 for name, val in filter.items())))
         total_count = (await db.execute(select(func.count()).select_from(query))).scalar()
+        if not total_count:
+            return {'pks': [], 'totalCount': 0}
         query = self.paginate(query, paging)
         data = await db.execute(query)
         return {'pks': data.scalars().all(), 'totalCount': total_count}
@@ -381,7 +389,7 @@ class DBResource(WebResource):
         # request.result.delete.update(((self.model, id) for id in ids))
 
     @verb(detached_instance=True)
-    async def m2m(self, attribute: str, method: str, keys):
+    async def m2m(self, attribute: str, method: str, keys: List[str], **kwargs):
         if attribute not in self.m2ms:
             raise ResourceNotFoundException(404, f'Attribute {attribute} not found on {self.name} resource')
         m2m = self.m2ms[attribute]
@@ -390,13 +398,7 @@ class DBResource(WebResource):
         verb = getattr(m2m, method)
         if not verb:
             raise ResourceNotFoundException(404, f'Method {method} not found on {self.name} resource')
-        ret = await verb(keys)
-        if method == 'set':
-            return dict_merge(
-                m2m.serialize(ret[0], 'del'),
-                m2m.serialize(ret[1], 'add'),
-            )
-        return m2m.serialize(ret, 'del' if method == 'delete' else 'add')
+        return await verb(keys, **kwargs)
 
     def validate(self, record: dict):
         ret = {}
@@ -415,7 +417,7 @@ class DBResource(WebResource):
         return f'<DB{self.name.capitalize()}Resource>'
 
 
-class M2MResource:
+class M2MResource(WebResource):
 
     def __init__(self, resource: DBResource, prop: RelationshipProperty):
         """Many to Many container for the DBResource."""
@@ -429,14 +431,78 @@ class M2MResource:
         self.fields = [local_field, remote_field]
         self.remote_key = next(iter(remote_field.foreign_keys)).column
         self.model_key = next(iter(local_field.foreign_keys)).column
+        self._columns: List[str] = None
+        self._remote_resource: DBResource = None
 
-    def serialize(self, keys: Set[Tuple[str, str]], verb: str):
-        return {'MANYTOMANY': {self.primary_resource.name.lower(): {self.attribute: {verb: list(map(list, keys))}}}}
+    @property
+    def remote_resource(self):
+        if not self._remote_resource:
+            self._remote_resource = self.resource_manager[self.remote_key.table]
+        return self._remote_resource
 
-    async def get(self, keys: List[Tuple[str, str]]) -> list[list[str]]:
-        """Query the DB to fetch the result items related to `keys."""
-        db_result = await db.execute(select(*self.fields).where(self.fields[0].in_(keys)))
-        return db_result.all()
+    @property
+    def columns(self):
+        if not self._columns:
+            self._columns = self.remote_resource.columns.copy()
+            self._columns.update({'$p': self.fields[0], '$f': self.fields[1]})
+        return self._columns
+
+    @property
+    def name(self):
+        return f'm2m-{kebab_case(self.primary_resource.name)}-{kebab_case(self.attribute)}'
+
+    @property
+    def model(self):
+        return self.remote_resource.model
+
+    @property
+    def join(self):
+        return self.model, self.fields[1] == self.remote_key
+
+    def paginate(self, query, paging: dict=None):
+        if not paging:
+            paging = {}
+        page = int(paging.get('page') or 0)
+        sort_by = [(name[1:], True) if name.startswith('~') else (name, False) for name in paging.get('sort', ['$p'])]
+        missing_sort_fields = {x[0] for x in sort_by} - set(self.columns)
+        if missing_sort_fields:
+            raise MissingFieldsException(missing_sort_fields)
+
+        if any(k[0] not in ('$k', '$f') for k in sort_by):
+            query = query.join(*self.join)
+        rpp = self.remote_resource.rpp
+        query = query.limit(rpp).offset((page) * rpp).order_by(*(
+            self.columns[name].desc() if asc else self.columns[name].asc()
+            for name, asc in sort_by
+        ))
+        return query
+
+    async def _query(self, filter: dict, paging: dict = None):
+        """Search according the `filter` and returns the list of PKs"""
+        # validate the filter
+        remote_cols = self.columns
+        if not all(key in remote_cols for key in filter.keys()):
+            raise UnknownFieldsException(set(filter.keys()) - set(self.columns))
+        query = select(self.fields[1])
+        query = query.filter(self.fields[0].in_(filter['$p']))
+        if any(k not in ('$p', '$fk') for k in filter):
+            query = (query.join(*self.join).filter(reduce(and_, (
+                getattr(self.model, name).in_(val) if
+                    isinstance(val, (list, tuple, set)) else
+                    getattr(self.model, name) == val
+                for name, val in filter.items()))))
+        total_count = (await db.execute(select(func.count()).select_from(query))).scalar()
+        if not total_count:
+            return {'pks': [], 'totalCount': 0}
+        query = self.paginate(query, paging)
+        data = await db.execute(query)
+        return {'pks': data.scalars().all(), 'totalCount': total_count}
+
+    @verb(detached_instance=True)
+    async def query(self, filter: dict = None, paging: dict = None, multiple: List = None):
+        if multiple:
+            return [await self._query(**args) for args in multiple]
+        return await self._query(filter, paging)
 
     async def get_associations(self, keys: List[Tuple[str, str]]) -> Set[Tuple[str, str]]:
         """Check what pair is stored in the DB starting from the given `keys`."""
@@ -453,7 +519,8 @@ class M2MResource:
             select(self.remote_key).where(self.remote_key.in_(remotes)))).scalars().all())
         return {(l, r) for l, r in keys if l in existing_locals and r in existing_remotes}
 
-    async def add(self, keys: Set[Tuple[str, str]]) -> Set[Tuple[str, str]]:
+    @verb(detached_instance=True)
+    async def post(self, keys: Set[Tuple[str, str]]) -> Dict | None:
         """Associate a list of related resources to the current one.
 
         keys: list of pairs of local and remote keys.
@@ -470,10 +537,13 @@ class M2MResource:
                 to_work = await self.get_existings(to_work)
                 if to_work:
                     await db.execute(loc.table.insert(), [{loc.name: l, rem.name: r} for l, r in to_work])
-            return to_work
-        return set()
+            if to_work:
+                return {'__': {'new': {self.name: [
+                    {"$pk": l, "$fk": r} for l, r in to_work]}}}
+        return None
 
-    async def delete(self, keys: Set[Tuple[str, str]]) -> Set[Tuple[str, str]]:
+    @verb(detached_instance=True)
+    async def delete(self, keys: Set[Tuple[str, str]]) -> Dict | None:
         """Dissociate a list of related resources from the current one.
 
         keys: list of pairs of local and remote keys."""
@@ -483,8 +553,10 @@ class M2MResource:
         if to_work:
             values = reduce(or_, (and_(loc == l, rem == r) for l, r in to_work))
             await db.execute(loc.table.delete().where(values))
-            return to_work
-        return set()
+            if to_work:
+                return {'__': {'delete': {self.name: [
+                    {"$pk": l, "$fk": r} for l, r in to_work]}}}
+        return None
 
     async def set(self, keys: Set[Tuple[str, str]]) -> Tuple[Set[Tuple[str, str]], Set[Tuple[str, str]]]:
         """Set the all links in one shot."""
