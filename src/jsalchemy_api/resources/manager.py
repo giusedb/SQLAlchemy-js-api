@@ -145,7 +145,14 @@ class ResourceManager:
     async def logout(self, token: str) -> dict | None:
         try:
             await self.context.destroy(token)
-            return 'Ok'
+            return {
+                'last_build': self.last_run,
+                'token': token,
+                'application': self.app_name,
+                'user_id': None,
+                'wsConnection': None,
+                'user': None
+            }
         except Exception:
             return 'Session not found'
 
