@@ -8,8 +8,8 @@ from click import style
 from sqlalchemy.orm import DeclarativeBase
 from typing_extensions import Callable
 
-from jsalchemy_web_context.interceptors import ResultData
-from utils import dict_merge
+from jsalchemy_web_context.interceptors import DBChange
+from ..utils import dict_merge
 from ..exceptions import HandledValidation
 
 from jsalchemy_web_context import ContextManager, session, request, db

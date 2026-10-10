@@ -11,7 +11,7 @@ from sqlalchemy import select, delete, or_, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, RelationshipDirection, RelationshipProperty
 
-from utils import dict_merge
+from ..utils import dict_merge
 from .base import WebResource, verb
 from jsalchemy_web_context import db, request
 
