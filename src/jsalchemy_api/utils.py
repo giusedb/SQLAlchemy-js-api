@@ -1,4 +1,7 @@
 import asyncio
+import importlib
+import logging
+import os
 import re
 from datetime import datetime
 from decimal import Decimal
@@ -6,6 +9,7 @@ from functools import wraps
 from itertools import groupby
 from typing import Tuple, Iterable
 
+from click import style
 # from orjson.orjson import dumps
 from sqlalchemy.orm import ColumnProperty, DeclarativeBase
 from sqlalchemy import DateTime, Date, Interval, LargeBinary, DECIMAL
@@ -121,3 +125,93 @@ def model_group(items: Iterable[DeclarativeBase], resource_manager=None):
     else:
         ret = {type(o).__name__: list(items) for o in sorted_items}
     return ret
+
+def dict_merge(a: dict, b: dict):
+    """Merge two dictionaries."""
+    return {**a, **b}
+
+def load_class(class_path: str):
+    """Load a class from a string."""
+    module, class_name = class_path.rsplit('.', 1)
+    module = importlib.import_module(module)
+    return getattr(module, class_name)
+
+def deep_scan_modules(path=None, _base=None):
+    """Scan a directory with all submodules and yield all python modules available."""
+    import pkgutil
+
+    if not path:
+        path = str(importlib.import_module('modules').__path__[0])
+    if _base is None:
+        _base = path
+    for mod in pkgutil.iter_modules([path]):
+        if mod.ispkg:
+            yield from deep_scan_modules(mod.module_finder.path + os.sep + mod.name, _base)
+            continue
+        package_name = os.path.relpath(mod.module_finder.path, _base).replace(os.sep, '.')
+        if package_name == '.':
+            package_name = ''
+        if package_name:
+            yield f'{package_name}.{mod.name}', [mod.name]
+        else:
+            yield mod.name, [mod.name]
+
+def get_all_models(BaseModelClass, excludes:Iterable[str]=()):
+    """Scan all `models` packages within the `modules` package and yield SQLAlchemy model classes.
+
+    Recursively discovers modules containing model definitions, imports them,
+    and yields every class that is a subclass of `BaseModelClass` (excluding
+    `BaseModelClass` itself).
+
+    Args:
+        BaseModelClass: The base class to check subclasses against.
+        excludes: Optional iterable of module names to skip.
+
+    Yields:
+        Tuples of (attribute_name, attribute_class) for each discovered model.
+    """
+    log = logging.getLogger('jsa.web.init')
+    for name, fromlist in deep_scan_modules():
+        if fromlist == ['models']:
+            log.info(f"importing {style('model', fg='cyan')} module from {style(name + '.' + fromlist[0], fg='yellow')}")
+            mod = __import__(name, fromlist=fromlist)
+            for attr_name, attr in mod.__dict__.items():
+                if attr_name.startswith('_'):
+                    continue
+                if isinstance(attr, type) and issubclass(attr, BaseModelClass) and attr is not BaseModelClass:
+                    log.info(f" -> {style(attr_name, fg='green')} ✅")
+                    yield attr_name, attr
+
+
+def init_all_resources(rm: 'jsalchemy_api.ResourceManager', excludes:Iterable[str]=(), path: str=None):
+    """Scan all `resources` packages within the `modules` package and register them with a ResourceManager.
+
+    Recursively discovers modules containing resource definitions, imports them,
+    and registers every `WebResource` subclass (excluding `WebResource` and
+    `DBResource` themselves) by instantiating them with the provided manager.
+
+    Args:
+        rm: The ResourceManager instance to register resources with.
+        excludes: Optional iterable of module names to skip.
+        path: Optional directory path to scan instead of the default `modules` package.
+    """
+    from jsalchemy_api import WebResource, DBResource
+    log = logging.getLogger('jsa.web.init')
+    for name, fromlist in deep_scan_modules(path=path):
+        if fromlist == ['resources']:
+            log.info(f"importing {style('resource', fg='cyan')} module from {style(name + '.' + fromlist[0], fg='yellow')} ")
+            mod = __import__(name, fromlist=fromlist)
+            for attr_name, attr in mod.__dict__.items():
+                if attr_name.startswith('_'):
+                    continue
+                if isinstance(attr, type) and issubclass(attr, WebResource) and attr not in {WebResource, DBResource}:
+                    log.info(f" -> registering {style(attr_name, fg='green')} ✅")
+                    instance = attr(rm)
+                    rm.register(instance)
+            for attr_name, attr in mod.__dict__.items():
+                if attr_name.startswith('_'):
+                    continue
+                if isinstance(attr, type) and issubclass(attr, WebResource) and attr not in {WebResource, DBResource}:
+                    log.info(f" -> registering {style(attr_name, fg='green')} ✅")
+                    instance = attr(rm)
+                    rm.register(instance)
