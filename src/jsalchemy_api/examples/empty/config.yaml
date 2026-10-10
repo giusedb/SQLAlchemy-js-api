@@ -1,0 +1,60 @@
+web:
+  name: 'jsalchemy'
+  host: localhost
+  port: 4000
+  reload: true
+  use_realtime: false
+  cookie_token: true
+  token_key: __token__
+  root_endpoint: 'jsalchemy'
+context:
+  db:
+    url: 'sqlite+aiosqlite:///test.db'
+    pool_size: 20
+    max_overflow: 0
+    pool_timeout: 30
+    pool_recycle: 1800
+    echo: true
+  redis:
+    url: 'redis://localhost:6379/1'
+api:
+  max_records_per_query: 200
+authentication:
+  salt: "$2b$05$/vgmzVaeg8BwTmFvVQlQ1."
+  identity_model: modules.base.auth.Identity
+  identified_by: email
+  password_field: password
+realtime:
+  port: 7998
+  enabled: false
+module-path: modules
+logging:
+  embedded:
+    version: 1
+    formatters:
+      simple:
+        format: '%(asctime)s %(levelname)s - %(message)s'
+        datefmt: '%H:%M:%S'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        level: DEBUG
+        formatter: simple
+        stream: ext://sys.stdout
+      stderr:
+        class: logging.StreamHandler
+        level: DEBUG
+        formatter: simple
+        stream: ext://sys.stderr
+    loggers:
+      JSAlchemy:
+        level: DEBUG
+        handlers: [ console ]
+        propagate: no
+      web.realtime:
+        level: DEBUG
+        handlers: [ console ]
+        propagate: no
+    root:
+      level: INFO
+      handlers: [ console ]
